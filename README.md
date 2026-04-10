@@ -16,6 +16,7 @@ A terminal multiplexer TUI that runs commands from a TOML profile in a live auto
 ```bash
 go build -o muxedo .
 ./muxedo -profile profile.toml
+./muxedo -dump-config
 ```
 
 Or run directly:
@@ -81,6 +82,8 @@ Note: scrollback capture works best with log-style and shell output. Full-screen
 Muxedo also looks for an optional app-level config at `~/.config/muxedo/config.toml`.
 
 If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the required profile passed via `-profile`.
+
+To generate a complete config file with every app-level option set to its default value, run `./muxedo -dump-config`. This creates the parent directory if needed and refuses to overwrite an existing file unless you also pass `-force`.
 
 You can also add a `[theme]` section to override the UI colors. Hex values are the intended format for themers, and muxedo will let the terminal renderer degrade them automatically on lower-color terminals. ANSI numeric strings still work too.
 

@@ -47,6 +47,46 @@ type ThemeConfig struct {
 	StatusHintBG        string `toml:"status_hint_bg"`
 }
 
+func Default() Config {
+	return Config{
+		Theme: DefaultTheme(),
+	}
+}
+
+func DefaultTheme() ThemeConfig {
+	return ThemeConfig{
+		InactiveBorder:      "#5f87af",
+		InactiveTitleFG:     "#d0d0d0",
+		InactiveTitleBG:     "#5f5f87",
+		ActiveNormalBorder:  "#ff8700",
+		ActiveNormalTitleFG: "#ffffd7",
+		ActiveNormalTitleBG: "#ff8700",
+		ActiveInsertBorder:  "#00ff00",
+		ActiveInsertTitleFG: "#ffffd7",
+		ActiveInsertTitleBG: "#00af00",
+		StoppedBorder:       "#585858",
+		StoppedTitleFG:      "#8a8a8a",
+		StoppedTitleBG:      "#444444",
+		EmptyBorder:         "#303030",
+		OverlayFG:           "#ffffd7",
+		OverlayBG:           "#444444",
+		StatusBarFG:         "#d0d0d0",
+		StatusBarBG:         "#262626",
+		StatusTimeFG:        "#ffffd7",
+		StatusTimeBG:        "#5f5f87",
+		StatusActivePanelFG: "#ffffd7",
+		StatusActivePanelBG: "#5f5fd7",
+		StatusModeNoneFG:    "#ffffd7",
+		StatusModeNoneBG:    "#585858",
+		StatusModeNormalFG:  "#ffffd7",
+		StatusModeNormalBG:  "#ff8700",
+		StatusModeInsertFG:  "#ffffd7",
+		StatusModeInsertBG:  "#00af00",
+		StatusHintFG:        "#d0d0d0",
+		StatusHintBG:        "#444444",
+	}
+}
+
 func Load() (Config, error) {
 	path, err := defaultPath()
 	if err != nil {
@@ -67,6 +107,38 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func Path() (string, error) {
+	return defaultPath()
+}
+
+func WriteDefault(force bool) (string, error) {
+	path, err := defaultPath()
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("creating muxedo config directory: %w", err)
+	}
+
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return "", fmt.Errorf("muxedo config already exists at %s: %w", path, os.ErrExist)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("checking muxedo config: %w", err)
+		}
+	}
+
+	data, err := toml.Marshal(Default())
+	if err != nil {
+		return "", fmt.Errorf("serializing muxedo config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("writing muxedo config: %w", err)
+	}
+	return path, nil
 }
 
 func defaultPath() (string, error) {
