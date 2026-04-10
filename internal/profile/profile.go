@@ -14,12 +14,12 @@ type PanelSpec struct {
 	Name       string
 	WorkingDir string
 	Cmd        string
+	CmdKill    string
 }
 
 type ScrollbackConfig struct {
 	Dir      string
 	MaxBytes int64
-	Editor   string
 }
 
 type Profile struct {
@@ -35,12 +35,12 @@ type rawProfile struct {
 type rawPanel struct {
 	WorkingDir string `toml:"workingdir"`
 	Cmd        string `toml:"cmd"`
+	CmdKill    string `toml:"cmd_kill"`
 }
 
 type rawScrollback struct {
 	Dir      string `toml:"dir"`
 	MaxBytes *int64 `toml:"max_bytes"`
-	Editor   string `toml:"editor"`
 }
 
 func Load(path string) (Profile, error) {
@@ -82,6 +82,7 @@ func Load(path string) (Profile, error) {
 			Name:       name,
 			WorkingDir: abs,
 			Cmd:        p.Cmd,
+			CmdKill:    p.CmdKill,
 		})
 	}
 
@@ -117,18 +118,9 @@ func resolveScrollback(raw rawScrollback) (ScrollbackConfig, error) {
 		maxBytes = *raw.MaxBytes
 	}
 
-	editor := raw.Editor
-	if editor == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	if editor == "" {
-		editor = "vi"
-	}
-
 	return ScrollbackConfig{
 		Dir:      dir,
 		MaxBytes: maxBytes,
-		Editor:   editor,
 	}, nil
 }
 

@@ -19,8 +19,8 @@ func historyLinesOf(lines ...string) []process.HistoryLine {
 
 func TestUpdateClickActivatesPanel(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	model = next.(Model)
@@ -40,8 +40,8 @@ func TestUpdateClickActivatesPanel(t *testing.T) {
 
 func TestStatusBarClickDoesNotActivatePanel(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 
 	const h = 40
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: h})
@@ -74,8 +74,8 @@ func TestStatusBarClickDoesNotActivatePanel(t *testing.T) {
 
 func TestStoppedPanelStaysActiveAcrossTickAfterClick(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.panelRunning = func(*process.Panel) bool { return false }
 
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 220, Height: 24})
@@ -105,8 +105,8 @@ func TestStoppedPanelStaysActiveAcrossTickAfterClick(t *testing.T) {
 func TestTickDeactivatesWhenActivePanelStops(t *testing.T) {
 	var running = true
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return running }
 
@@ -133,8 +133,8 @@ func TestTickDeactivatesWhenActivePanelStops(t *testing.T) {
 
 func TestEscapeFromNormalBlursPanel(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
@@ -151,8 +151,8 @@ func TestEscapeFromNormalBlursPanel(t *testing.T) {
 
 func TestEscapeFromMaximizedNormalRestoresGridAndBlursPanel(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.maximizedPanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
@@ -173,8 +173,8 @@ func TestEscapeFromMaximizedNormalRestoresGridAndBlursPanel(t *testing.T) {
 
 func TestEscapeTrickleInsertToNormalThenBlur(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
@@ -199,8 +199,8 @@ func TestEscapeTrickleInsertToNormalThenBlur(t *testing.T) {
 
 func TestUpdateActivePanelCapturesKeyboard(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(p *process.Panel) bool { return true }
 
@@ -246,8 +246,8 @@ func TestUpdateActivePanelCapturesKeyboard(t *testing.T) {
 
 func TestStoppedPanelIgnoresNonReloadKeys(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var writes [][]byte
@@ -271,8 +271,8 @@ func TestStoppedPanelIgnoresNonReloadKeys(t *testing.T) {
 
 func TestStoppedPanelRestartsOnR(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var restarted bool
@@ -294,8 +294,8 @@ func TestStoppedPanelRestartsOnR(t *testing.T) {
 
 func TestStoppedPanelRestartsOnUpperR(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var restarted bool
@@ -317,8 +317,8 @@ func TestStoppedPanelRestartsOnUpperR(t *testing.T) {
 
 func TestRunningPanelNormalDoesNotForwardR(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var writes [][]byte
@@ -348,8 +348,8 @@ func TestRunningPanelNormalDoesNotForwardR(t *testing.T) {
 
 func TestRunningPanelForwardsAfterInsert(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var writes [][]byte
@@ -373,8 +373,8 @@ func TestRunningPanelForwardsAfterInsert(t *testing.T) {
 
 func TestRunningPanelForwardsMInInsertMode(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var writes [][]byte
@@ -401,8 +401,8 @@ func TestRunningPanelForwardsMInInsertMode(t *testing.T) {
 
 func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 
 	var writes [][]byte
@@ -419,39 +419,10 @@ func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	}
 }
 
-func TestSOpensScrollbackLikeCtrlO(t *testing.T) {
-	panel := process.NewWithScrollback("one", "echo one", ".", t.TempDir(), 0)
-	model := NewModel([]*process.Panel{panel}, "vi")
-	model.activePanel = 0
-	model.panelRunning = func(*process.Panel) bool { return true }
-
-	var writes [][]byte
-	model.sendInput = func(_ *process.Panel, data []byte) error {
-		writes = append(writes, data)
-		return nil
-	}
-
-	var editorCalled bool
-	model.openEditor = func(editor, path string) tea.Cmd {
-		editorCalled = true
-		return nil
-	}
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
-	_ = next.(Model)
-
-	if len(writes) != 0 {
-		t.Fatalf("expected S not forwarded in normal mode, got %d writes", len(writes))
-	}
-	if !editorCalled {
-		t.Fatal("expected openEditor on S")
-	}
-}
-
 func TestClickResetsInsertMode(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.panelRunning = func(*process.Panel) bool { return true }
 
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -477,63 +448,10 @@ func TestClickResetsInsertMode(t *testing.T) {
 	}
 }
 
-func TestCtrlOOpensEditorInsteadOfForwarding(t *testing.T) {
-	panel := process.NewWithScrollback("one", "echo one", ".", t.TempDir(), 0)
-	model := NewModel([]*process.Panel{panel}, "vi")
-	model.activePanel = 0
-	model.panelRunning = func(p *process.Panel) bool { return true }
-
-	var writes [][]byte
-	model.sendInput = func(_ *process.Panel, data []byte) error {
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		writes = append(writes, cp)
-		return nil
-	}
-
-	var editorCalled bool
-	model.openEditor = func(editor, path string) tea.Cmd {
-		editorCalled = true
-		return nil
-	}
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
-	_ = next.(Model)
-
-	if len(writes) != 0 {
-		t.Fatalf("expected ctrl+o NOT to be forwarded to panel, got %d writes", len(writes))
-	}
-	if !editorCalled {
-		t.Fatal("expected openEditor to be called on ctrl+o")
-	}
-}
-
-func TestCtrlONoopWithoutActivePanel(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
-
-	var editorCalled bool
-	model.openEditor = func(editor, path string) tea.Cmd {
-		editorCalled = true
-		return nil
-	}
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
-	_ = next.(Model)
-
-	if editorCalled {
-		t.Fatal("expected openEditor NOT to be called when no panel is active")
-	}
-	if cmd != nil {
-		t.Fatal("expected nil cmd when no panel is active")
-	}
-}
-
 func TestMWithoutActivePanelDoesNothing(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	model = next.(Model)
@@ -548,8 +466,8 @@ func TestMWithoutActivePanelDoesNothing(t *testing.T) {
 
 func TestMFocusedNormalTogglesMaximize(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
@@ -568,10 +486,10 @@ func TestMFocusedNormalTogglesMaximize(t *testing.T) {
 
 func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
 	panels := []*process.Panel{
-		process.New("one", "echo one", "."),
-		process.New("two", "echo two", "."),
+		process.New("one", "echo one", "", "."),
+		process.New("two", "echo two", "", "."),
 	}
-	model := NewModel(panels, "vi")
+	model := NewModel(panels)
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
@@ -608,8 +526,8 @@ func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
 
 func TestStoppedPanelNormalMTogglesMaximize(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return false }
 
@@ -622,56 +540,45 @@ func TestStoppedPanelNormalMTogglesMaximize(t *testing.T) {
 
 func TestUpdateInactiveQQuits(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	teaModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd == nil {
 		t.Fatalf("expected quit command when no panel is active")
 	}
 
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("expected tea.QuitMsg from quit command")
+	if !teaModel.(Model).exiting {
+		t.Fatalf("expected model to be in exiting state")
 	}
 }
 
-func TestVimGTWhenUnfocused(t *testing.T) {
+func TestDigitWhenUnfocusedFocusesPanel(t *testing.T) {
 	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
+		process.New("a", "echo a", "", "."),
+		process.New("b", "echo b", "", "."),
 	}
-	model := NewModel(panels, "vi")
+	model := NewModel(panels)
 	model.activePanel = -1
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	model = next.(Model)
-	if !model.afterGForTab {
-		t.Fatal("expected pending g for gt")
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("gt: want first panel, got %d", model.activePanel)
-	}
-	if model.afterGForTab {
-		t.Fatal("expected pending g cleared")
+	if model.activePanel != 1 {
+		t.Fatalf("digit 2: want panel 1, got %d", model.activePanel)
 	}
 
 	model.activePanel = -1
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-	model = next.(Model)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	model = next.(Model)
 	if model.activePanel != 0 {
-		t.Fatalf("gT from unfocused: want first panel, got %d", model.activePanel)
+		t.Fatalf("digit 1: want panel 0, got %d", model.activePanel)
 	}
 }
 
 func TestVimGThenQuit(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("a", "echo a", "."),
-	}, "vi")
+		process.New("a", "echo a", "", "."),
+	})
 	model.activePanel = -1
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
@@ -681,48 +588,83 @@ func TestVimGThenQuit(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected quit after g then q")
 	}
-	if model.afterGForTab {
-		t.Fatal("pending g should clear before quit")
-	}
 }
 
-func TestMacOSDaggerRunesCycleWhenFocused(t *testing.T) {
+func TestHjklGridFourPanels(t *testing.T) {
 	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
+		process.New("a", "echo a", "", "."),
+		process.New("b", "echo b", "", "."),
+		process.New("c", "echo c", "", "."),
+		process.New("d", "echo d", "", "."),
 	}
-	model := NewModel(panels, "vi")
+	model := NewModel(panels)
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	var writes [][]byte
-	model.sendInput = func(_ *process.Panel, data []byte) error {
-		writes = append(writes, append([]byte(nil), data...))
-		return nil
-	}
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\u2020'}})
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	model = next.(Model)
 	if model.activePanel != 1 {
-		t.Fatalf("† (macOS Opt+t): want panel 1, got %d", model.activePanel)
+		t.Fatalf("l from 0: want 1, got %d", model.activePanel)
 	}
-	if len(writes) != 0 {
-		t.Fatalf("† must not forward to panel, got %q", writes)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = next.(Model)
+	if model.activePanel != 3 {
+		t.Fatalf("j from 1: want 3, got %d", model.activePanel)
 	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\u2021'}})
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	model = next.(Model)
+	if model.activePanel != 1 {
+		t.Fatalf("k from 3: want 1, got %d", model.activePanel)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	model = next.(Model)
 	if model.activePanel != 0 {
-		t.Fatalf("‡ (macOS Opt+T): want panel 0, got %d", model.activePanel)
+		t.Fatalf("h from 1: want 0, got %d", model.activePanel)
 	}
 }
 
-func TestAltTWhenFocusedCycles(t *testing.T) {
+func TestHjklWhenMaximizedKeepsSinglePanelMode(t *testing.T) {
 	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
+		process.New("a", "echo a", "", "."),
+		process.New("b", "echo b", "", "."),
 	}
-	model := NewModel(panels, "vi")
+	model := NewModel(panels)
+	model.activePanel = 0
+	model.maximizedPanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	model = next.(Model)
+	if model.activePanel != 1 {
+		t.Fatalf("l: want panel 1, got %d", model.activePanel)
+	}
+	if model.maximizedPanel != 1 {
+		t.Fatalf("want maximized panel 1, got %d", model.maximizedPanel)
+	}
+}
+
+func TestDigitWhenUnfocusedSelectsPanel(t *testing.T) {
+	panels := []*process.Panel{
+		process.New("a", "echo a", "", "."),
+		process.New("b", "echo b", "", "."),
+		process.New("c", "echo c", "", "."),
+	}
+	model := NewModel(panels)
+	model.activePanel = -1
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model = next.(Model)
+	if model.activePanel != 2 {
+		t.Fatalf("digit 3 from inactive: want panel 2, got %d", model.activePanel)
+	}
+}
+
+func TestInsertModeForwardsHjklDoesNotSwitchPanel(t *testing.T) {
+	panels := []*process.Panel{
+		process.New("a", "echo a", "", "."),
+		process.New("b", "echo b", "", "."),
+	}
+	model := NewModel(panels)
 	model.activePanel = 0
 	model.panelInsertMode = true
 	model.panelRunning = func(*process.Panel) bool { return true }
@@ -733,166 +675,45 @@ func TestAltTWhenFocusedCycles(t *testing.T) {
 		return nil
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
-	model = next.(Model)
-	if model.panelInsertMode {
-		t.Fatal("panel switch should reset insert mode")
-	}
-	if model.activePanel != 1 {
-		t.Fatalf("Alt+t: want panel 1, got %d", model.activePanel)
-	}
-	if len(writes) != 0 {
-		t.Fatalf("Alt+t must not forward to panel, got %v", writes)
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}, Alt: true})
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	model = next.(Model)
 	if model.activePanel != 0 {
-		t.Fatalf("Alt+T: want panel 0, got %d", model.activePanel)
+		t.Fatalf("insert+h: want stay on panel 0, got %d", model.activePanel)
+	}
+	if len(writes) == 0 {
+		t.Fatal("expected h forwarded to PTY")
 	}
 }
 
-func TestAltTWhenMaximizedKeepsSinglePanelMode(t *testing.T) {
+func TestNormalModeDigitJumpsWithoutForwarding(t *testing.T) {
 	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
+		process.New("a", "echo a", "", "."),
+		process.New("b", "echo b", "", "."),
 	}
-	model := NewModel(panels, "vi")
+	model := NewModel(panels)
 	model.activePanel = 0
-	model.maximizedPanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 1 {
-		t.Fatalf("Alt+t: want panel 1, got %d", model.activePanel)
-	}
-	if model.maximizedPanel != 1 {
-		t.Fatalf("Alt+t: want maximized panel 1, got %d", model.maximizedPanel)
-	}
-}
-
-func TestPanelShortcutInactiveAlwaysSelectsFirst(t *testing.T) {
-	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
-		process.New("c", "echo c", "."),
-	}
-	model := NewModel(panels, "vi")
-	model.activePanel = -1
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("Ctrl+] from inactive: want panel 0, got %d", model.activePanel)
-	}
-
-	model.activePanel = -1
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("Meta+[ from inactive: want panel 0, got %d", model.activePanel)
-	}
-}
-
-func TestPanelShortcutsCycleRightAndLeft(t *testing.T) {
-	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
-		process.New("c", "echo c", "."),
-	}
-	model := NewModel(panels, "vi")
-	model.activePanel = 0
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket})
-	model = next.(Model)
-	if model.activePanel != 1 {
-		t.Fatalf("after Ctrl+] from 0: want 1, got %d", model.activePanel)
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("after Meta+[ from 1: want 0, got %d", model.activePanel)
-	}
-
-	model.activePanel = 1
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("after Alt+Ctrl+] from 1: want 0, got %d", model.activePanel)
-	}
-
-	model.activePanel = 0
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 2 {
-		t.Fatalf("after Meta+[ from 0: want wrap to 2, got %d", model.activePanel)
-	}
-
-	model.activePanel = 2
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("after Meta+] from 2: want wrap to 0, got %d", model.activePanel)
-	}
-}
-
-func TestPanelShortcutsAltCtrlArrows(t *testing.T) {
-	panels := []*process.Panel{
-		process.New("a", "echo a", "."),
-		process.New("b", "echo b", "."),
-	}
-	model := NewModel(panels, "vi")
-	model.activePanel = 0
-
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlRight, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 1 {
-		t.Fatalf("Alt+Ctrl+Right from 0: want 1, got %d", model.activePanel)
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlLeft, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("Alt+Ctrl+Left from 1: want 0, got %d", model.activePanel)
-	}
-
-	model.activePanel = -1
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlLeft, Alt: true})
-	model = next.(Model)
-	if model.activePanel != 0 {
-		t.Fatalf("from inactive: want first panel, got %d", model.activePanel)
-	}
-}
-
-func TestRunningPanelDoesNotForwardPanelSwitchKeys(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
-	model.activePanel = 0
 
 	var writes [][]byte
 	model.sendInput = func(_ *process.Panel, data []byte) error {
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		writes = append(writes, cp)
+		writes = append(writes, append([]byte(nil), data...))
 		return nil
 	}
-	model.panelRunning = func(p *process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket})
-	_ = next.(Model)
-
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	model = next.(Model)
+	if model.activePanel != 1 {
+		t.Fatalf("digit 2: want panel 1, got %d", model.activePanel)
+	}
 	if len(writes) != 0 {
-		t.Fatalf("expected Ctrl+] not forwarded to panel, got %v", writes)
+		t.Fatalf("digit must not forward to panel, got %v", writes)
 	}
 }
 
 func TestStatusHintRunningNormalShowsNormalShortcuts(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
@@ -906,12 +727,15 @@ func TestStatusHintRunningNormalShowsNormalShortcuts(t *testing.T) {
 	if !strings.Contains(hint, "Esc blur") {
 		t.Fatalf("expected normal hint to mention Esc blur, got: %q", hint)
 	}
+	if !strings.Contains(hint, "hjkl panes") {
+		t.Fatalf("expected normal hint to mention hjkl panes, got: %q", hint)
+	}
 }
 
 func TestStatusHintMaximizedShowsRestoreShortcut(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.maximizedPanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
@@ -927,8 +751,8 @@ func TestStatusHintMaximizedShowsRestoreShortcut(t *testing.T) {
 
 func TestStatusHintRunningInsertShowsInsertShortcuts(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelInsertMode = true
 	model.panelRunning = func(*process.Panel) bool { return true }
@@ -945,10 +769,20 @@ func TestStatusHintRunningInsertShowsInsertShortcuts(t *testing.T) {
 	}
 }
 
+func TestStatusHintUnfocusedMentionsDigitsAndHjkl(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	hint := model.statusHint()
+	if !strings.Contains(hint, "1–9") || !strings.Contains(hint, "hjkl") {
+		t.Fatalf("expected unfocused hint for digits and hjkl, got: %q", hint)
+	}
+}
+
 func TestStatusModeLabel(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 
 	if got := model.statusModeLabel(); got != "NONE" {
 		t.Fatalf("expected NONE when no active panel, got %q", got)
@@ -968,8 +802,8 @@ func TestStatusModeLabel(t *testing.T) {
 
 func TestViewStatusLineIncludesMode(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.panelRunning = func(*process.Panel) bool { return true }
 
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
@@ -985,12 +819,18 @@ func TestViewStatusLineIncludesMode(t *testing.T) {
 	if !strings.Contains(view, "MODE: INSERT") {
 		t.Fatalf("expected INSERT mode indicator in status line, got view %q", view)
 	}
+
+	model.panelInsertMode = false
+	view = model.View()
+	if !strings.Contains(view, "active panel: [1] one") {
+		t.Fatalf("expected numbered active panel in status line, got view %q", view)
+	}
 }
 
 func TestZEntersScrollMode(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 	model.historyLines = func(*process.Panel) []process.HistoryLine {
@@ -1010,8 +850,8 @@ func TestZEntersScrollMode(t *testing.T) {
 
 func TestScrollModeConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelScrollMode = true
 	model.width = 80
@@ -1045,8 +885,8 @@ func TestScrollModeConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
 
 func TestScrollModeSelectionAndMarkPersistAcrossAppend(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelScrollMode = true
 	model.width = 80
@@ -1078,8 +918,8 @@ func TestScrollModeSelectionAndMarkPersistAcrossAppend(t *testing.T) {
 
 func TestScrollModeMarkedLineScrollsOffButCanBeFoundAgain(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelScrollMode = true
 	model.width = 80
@@ -1120,8 +960,8 @@ func TestScrollModeMarkedLineScrollsOffButCanBeFoundAgain(t *testing.T) {
 
 func TestScrollModeRetainsMarkWhenLineTemporarilyMissing(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelScrollMode = true
 	model.width = 80
@@ -1174,8 +1014,8 @@ func TestScrollModeRetainsMarkWhenLineTemporarilyMissing(t *testing.T) {
 
 func TestScrollModeMarkStaysOnOriginalDuplicateLine(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelScrollMode = true
 	model.width = 80
@@ -1210,8 +1050,8 @@ func TestScrollModeMarkStaysOnOriginalDuplicateLine(t *testing.T) {
 
 func TestStatusModeLabelIncludesScroll(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "."),
-	}, "vi")
+		process.New("one", "echo one", "", "."),
+	})
 	model.activePanel = 0
 	model.panelScrollMode = true
 
