@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +28,10 @@ type Panel struct {
 	runtimeMu  sync.RWMutex
 	startedAt  time.Time
 	elapsed    time.Duration
+
+	displayMu    sync.Mutex
+	displayCache string
+	displayDirty bool
 }
 
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
@@ -77,6 +80,7 @@ func (p *Panel) Start() error {
 	p.elapsed = 0
 	p.runtimeMu.Unlock()
 	p.running.Store(true)
+	p.markDisplayDirty()
 
 	go p.readLoop()
 	return nil
@@ -92,6 +96,7 @@ func (p *Panel) readLoop() {
 			p.term.Write(buf[:n]) //nolint:errcheck
 			termSnap := p.term.String()
 			p.termMu.Unlock()
+			p.markDisplayDirty()
 			if p.sb != nil {
 				p.sb.Capture(termSnap)
 			}
@@ -126,6 +131,7 @@ func (p *Panel) Resize(cols, rows int) {
 	if p.sb != nil {
 		p.sb.Reset()
 	}
+	p.markDisplayDirty()
 }
 
 func (p *Panel) Running() bool {
@@ -156,6 +162,7 @@ func (p *Panel) Restart() error {
 	if p.sb != nil {
 		p.sb.Clear()
 	}
+	p.markDisplayDirty()
 	return p.Start()
 }
 
@@ -201,7 +208,7 @@ func (p *Panel) History() []HistoryLine {
 		}
 		return out
 	}
-	return p.sb.History(strings.Join(screen, "\n"))
+	return p.sb.History(screen)
 }
 
 func (p *Panel) WriteInput(data []byte) error {
@@ -252,4 +259,59 @@ func (p *Panel) markStopped() {
 		p.elapsed = time.Since(p.startedAt)
 	}
 	p.runtimeMu.Unlock()
+}
+
+func (p *Panel) markDisplayDirty() {
+	p.displayMu.Lock()
+	p.displayDirty = true
+	p.displayMu.Unlock()
+}
+
+// DisplayDirty reports whether the terminal buffer changed since the last
+// successful DisplayForView refresh (PTY read or resize).
+func (p *Panel) DisplayDirty() bool {
+	p.displayMu.Lock()
+	d := p.displayDirty
+	p.displayMu.Unlock()
+	return d
+}
+
+// DisplayForView returns the terminal snapshot for TUI rendering. When the
+// screen has not changed since the last call, it reuses the cached string and
+// avoids vt10x.Terminal.String(). History and Output always read fresh state.
+func (p *Panel) DisplayForView() string {
+	for {
+		p.displayMu.Lock()
+		if !p.displayDirty {
+			s := p.displayCache
+			p.displayMu.Unlock()
+			return s
+		}
+		p.displayMu.Unlock()
+
+		p.termMu.RLock()
+		s := p.term.String()
+		p.termMu.RUnlock()
+
+		p.displayMu.Lock()
+		if !p.displayDirty {
+			out := p.displayCache
+			p.displayMu.Unlock()
+			return out
+		}
+		p.displayCache = s
+		p.displayDirty = false
+		out := p.displayCache
+		p.displayMu.Unlock()
+
+		// A PTY read may have landed after term.String() but before we cleared
+		// displayDirty; re-check so we do not return a stale cache for a frame.
+		p.displayMu.Lock()
+		again := p.displayDirty
+		p.displayMu.Unlock()
+		if again {
+			continue
+		}
+		return out
+	}
 }

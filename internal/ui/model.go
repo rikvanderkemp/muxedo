@@ -329,7 +329,7 @@ func (m Model) View() string {
 	gh := m.gridHeight()
 	if idx, ok := m.visibleMaximizedPanel(); ok {
 		p := m.panels[idx]
-		out := p.Output()
+		out := p.DisplayForView()
 		stopped := !m.panelRunning(p)
 		body := renderPane(
 			m.theme,
@@ -359,7 +359,7 @@ func (m Model) View() string {
 		for c := 0; c < m.grid.Cols; c++ {
 			if idx < len(m.panels) {
 				p := m.panels[idx]
-				out := p.Output()
+				out := p.DisplayForView()
 				stopped := !m.panelRunning(p)
 				pane := renderPane(
 					m.theme,

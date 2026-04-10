@@ -1,0 +1,26 @@
+[panel.deco]
+workingdir = "~/code/"
+cmd = "watch -n2 ls"
+
+
+
+[panel.lift5]
+workingdir = "~/code/"
+
+cmd = '''
+  i=0
+  while true; do
+    for _ in $(seq 1 20); do
+      printf '%s  burst line %06d\n' "$(date +%H:%M:%S)" "$i"
+      i=$((i+1))
+      sleep 0.05
+    done
+    echo "--- pause ---"
+    sleep 2
+  done
+  '''
+
+
+
+
+
