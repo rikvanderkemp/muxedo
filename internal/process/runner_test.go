@@ -40,6 +40,10 @@ func TestPanelStoppedAfterProcessExits(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+
+	if got := p.Elapsed(); got < 0 {
+		t.Fatalf("elapsed must not be negative, got %v", got)
+	}
 }
 
 func TestPanelRestart(t *testing.T) {
@@ -83,4 +87,55 @@ func TestRestartWhileRunningIsIdempotent(t *testing.T) {
 		t.Fatal("panel should still be running after restart")
 	}
 	p.Stop()
+}
+
+func TestPanelElapsedAdvancesWhileRunningAndFreezesAfterStop(t *testing.T) {
+	p := New("test", "sleep 60", ".")
+	if err := p.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	time.Sleep(120 * time.Millisecond)
+	runningElapsed := p.Elapsed()
+	if runningElapsed < 100*time.Millisecond {
+		p.Stop()
+		t.Fatalf("expected elapsed to advance while running, got %v", runningElapsed)
+	}
+
+	p.Stop()
+	stoppedElapsed := p.Elapsed()
+	if stoppedElapsed < runningElapsed {
+		t.Fatalf("expected stopped elapsed >= running elapsed, got running=%v stopped=%v", runningElapsed, stoppedElapsed)
+	}
+
+	time.Sleep(120 * time.Millisecond)
+	frozenElapsed := p.Elapsed()
+	if frozenElapsed > stoppedElapsed+50*time.Millisecond {
+		t.Fatalf("expected elapsed to freeze after stop, got stopped=%v frozen=%v", stoppedElapsed, frozenElapsed)
+	}
+}
+
+func TestPanelRestartResetsElapsed(t *testing.T) {
+	p := New("test", "sleep 60", ".")
+	if err := p.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	beforeRestart := p.Elapsed()
+	if beforeRestart < 100*time.Millisecond {
+		p.Stop()
+		t.Fatalf("expected elapsed before restart to advance, got %v", beforeRestart)
+	}
+
+	if err := p.Restart(); err != nil {
+		t.Fatalf("restart failed: %v", err)
+	}
+	defer p.Stop()
+
+	time.Sleep(20 * time.Millisecond)
+	afterRestart := p.Elapsed()
+	if afterRestart >= 100*time.Millisecond {
+		t.Fatalf("expected elapsed to reset after restart, got %v", afterRestart)
+	}
 }

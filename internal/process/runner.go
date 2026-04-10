@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
@@ -16,14 +17,17 @@ type Panel struct {
 	Cmd  string
 	Dir  string
 
-	ptmx    *os.File
-	cmd     *exec.Cmd
-	term    vt10x.Terminal
-	termMu  sync.RWMutex
-	running atomic.Bool
-	sb      *scrollbackWriter
-	historyMu       sync.Mutex
-	rawHistory      []byte
+	ptmx       *os.File
+	cmd        *exec.Cmd
+	term       vt10x.Terminal
+	termMu     sync.RWMutex
+	running    atomic.Bool
+	sb         *scrollbackWriter
+	historyMu  sync.Mutex
+	rawHistory []byte
+	runtimeMu  sync.RWMutex
+	startedAt  time.Time
+	elapsed    time.Duration
 }
 
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
@@ -59,6 +63,10 @@ func (p *Panel) Start() error {
 
 	p.cmd = c
 	p.ptmx = ptmx
+	p.runtimeMu.Lock()
+	p.startedAt = time.Now()
+	p.elapsed = 0
+	p.runtimeMu.Unlock()
 	p.running.Store(true)
 
 	go p.readLoop()
@@ -80,7 +88,7 @@ func (p *Panel) readLoop() {
 			}
 		}
 		if err != nil {
-			p.running.Store(false)
+			p.markStopped()
 			return
 		}
 	}
@@ -116,7 +124,7 @@ func (p *Panel) Running() bool {
 }
 
 func (p *Panel) Stop() {
-	p.running.Store(false)
+	p.markStopped()
 	if p.ptmx != nil {
 		p.ptmx.Close()
 		p.ptmx = nil
@@ -140,6 +148,18 @@ func (p *Panel) Restart() error {
 		p.sb.Clear()
 	}
 	return p.Start()
+}
+
+func (p *Panel) Elapsed() time.Duration {
+	p.runtimeMu.RLock()
+	startedAt := p.startedAt
+	elapsed := p.elapsed
+	p.runtimeMu.RUnlock()
+
+	if p.running.Load() && !startedAt.IsZero() {
+		return time.Since(startedAt)
+	}
+	return elapsed
 }
 
 // ScrollbackPath returns the path to the scrollback log file, or empty if
@@ -187,4 +207,16 @@ func (p *Panel) historySnapshot() []byte {
 	cp := make([]byte, len(p.rawHistory))
 	copy(cp, p.rawHistory)
 	return cp
+}
+
+func (p *Panel) markStopped() {
+	if !p.running.Swap(false) {
+		return
+	}
+
+	p.runtimeMu.Lock()
+	if !p.startedAt.IsZero() {
+		p.elapsed = time.Since(p.startedAt)
+	}
+	p.runtimeMu.Unlock()
 }
