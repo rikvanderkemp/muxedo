@@ -81,11 +81,14 @@ func (sw *scrollbackWriter) Path() string {
 	return sw.path
 }
 
-func (sw *scrollbackWriter) History(screen string) []HistoryLine {
+// History merges persisted scrollback with the current screen. The screen
+// argument must be normalized the same way as normalizeScreen (trimmed
+// trailing spaces per line, split on "\n").
+func (sw *scrollbackWriter) History(screen []string) []HistoryLine {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
-	cur := sw.syncScreenLocked(normalizeScreen(screen))
+	cur := sw.syncScreenLocked(screen)
 	if len(sw.lines) == 0 {
 		return append([]HistoryLine(nil), cur...)
 	}
