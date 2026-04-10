@@ -23,6 +23,7 @@ type Model struct {
 	height           int
 	grid             layout.Grid
 	activePanel      int
+	maximizedPanel   int
 	panelInsertMode  bool   // when a panel is focused: false = normal (vim-like), true = keys go to PTY
 	prevPanelRunning []bool // per-panel running state last tick; detects run→stop while focused
 	afterGForTab     bool   // saw "g", expect "t"/"T" (vim :tabnext / :tabprev) when no panel focused
@@ -41,11 +42,12 @@ func NewModel(panels []*process.Panel, editor string, themes ...Theme) Model {
 	}
 
 	return Model{
-		panels:      panels,
-		theme:       theme,
-		grid:        layout.Compute(len(panels)),
-		activePanel: -1,
-		editor:      editor,
+		panels:         panels,
+		theme:          theme,
+		grid:           layout.Compute(len(panels)),
+		activePanel:    -1,
+		maximizedPanel: -1,
+		editor:         editor,
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -91,8 +93,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.panelInsertMode = false
 					return m, nil
 				}
+				m.maximizedPanel = -1
 				m.activePanel = -1
 				m.panelInsertMode = false
+				m.resizePanels()
 				return m, nil
 			}
 			return m, nil
@@ -106,6 +110,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activePanel = 0
 				} else {
 					m.activePanel = (m.activePanel + d + n) % n
+				}
+				if m.maximizedPanel >= 0 {
+					m.maximizedPanel = m.activePanel
+					m.resizePanels()
 				}
 			}
 			return m, nil
@@ -165,6 +173,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch msg.Runes[0] {
 					case 'i', 'I':
 						m.panelInsertMode = true
+					case 'm', 'M':
+						m.toggleMaximized()
 					case 's', 'S':
 						if path := p.ScrollbackPath(); path != "" {
 							return m, m.openEditor(m.editor, path)
@@ -185,6 +195,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch msg.Runes[0] {
 				case 'i', 'I':
 					m.panelInsertMode = true
+					return m, nil
+				case 'm', 'M':
+					m.toggleMaximized()
 					return m, nil
 				case 'r', 'R':
 					_ = m.restartPanel(p)
@@ -214,6 +227,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.afterGForTab = false
 				m.activePanel = idx
 				m.panelInsertMode = false
+				if m.maximizedPanel >= 0 {
+					m.maximizedPanel = idx
+				}
 			}
 		}
 
@@ -241,8 +257,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i := range m.panels {
 				now := m.panelRunning(m.panels[i])
 				if i == m.activePanel && m.prevPanelRunning[i] && !now {
+					m.maximizedPanel = -1
 					m.activePanel = -1
 					m.panelInsertMode = false
+					m.resizePanels()
 				}
 				m.prevPanelRunning[i] = now
 			}
@@ -266,6 +284,27 @@ func (m Model) View() string {
 	}
 
 	gh := m.gridHeight()
+	if idx, ok := m.visibleMaximizedPanel(); ok {
+		p := m.panels[idx]
+		out := p.Output()
+		stopped := !m.panelRunning(p)
+		body := renderPane(
+			m.theme,
+			p.Name,
+			out,
+			m.width,
+			gh,
+			idx == m.activePanel,
+			stopped,
+			m.panelInsertMode,
+			formatElapsed(p.Elapsed()),
+		)
+		if m.height > 1 {
+			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
+		}
+		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body)
+	}
+
 	cell := layout.CellSizes(m.width, gh, m.grid.Rows, m.grid.Cols)
 
 	var gridRows []string
@@ -301,30 +340,7 @@ func (m Model) View() string {
 
 	body := strings.Join(gridRows, "\n")
 	if m.height > 1 {
-		panelName := "none"
-		if m.activePanel >= 0 && m.activePanel < len(m.panels) {
-			panelName = m.panels[m.activePanel].Name
-		}
-		hint := m.statusHint()
-		mode := m.statusModeLabel()
-		modeFG := m.theme.color(m.theme.StatusModeNoneFG)
-		modeBG := m.theme.color(m.theme.StatusModeNoneBG)
-		switch mode {
-		case "NORMAL":
-			modeFG = m.theme.color(m.theme.StatusModeNormalFG)
-			modeBG = m.theme.color(m.theme.StatusModeNormalBG)
-		case "INSERT":
-			modeFG = m.theme.color(m.theme.StatusModeInsertFG)
-			modeBG = m.theme.color(m.theme.StatusModeInsertBG)
-		}
-		segments := []statusSegment{
-			{Text: time.Now().Format("15:04:05"), FG: m.theme.color(m.theme.StatusTimeFG), BG: m.theme.color(m.theme.StatusTimeBG)},
-			{Text: fmt.Sprintf("active panel: %q", panelName), FG: m.theme.color(m.theme.StatusActivePanelFG), BG: m.theme.color(m.theme.StatusActivePanelBG)},
-			{Text: "MODE: " + mode, FG: modeFG, BG: modeBG},
-			{Text: hint, FG: m.theme.color(m.theme.StatusHintFG), BG: m.theme.color(m.theme.StatusHintBG)},
-		}
-		statusRendered := renderStatusLine(m.theme, m.width, segments)
-		body = lipgloss.JoinVertical(lipgloss.Left, body, statusRendered)
+		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body)
@@ -347,16 +363,22 @@ func (m Model) statusHint() string {
 
 	p := m.panels[m.activePanel]
 	parts := []string{}
+	maximizeAction := "M maximize"
+	escapeAction := "Esc blur"
+	if m.maximizedPanel == m.activePanel {
+		maximizeAction = "M restore"
+		escapeAction = "Esc restore+blur"
+	}
 	if !m.panelRunning(p) {
 		if m.panelInsertMode {
 			parts = append(parts, "STOPPED-INSERT: Esc normal")
 		} else {
-			parts = append(parts, "STOPPED-NORMAL: I insert", "R reload", "S scrollback", "Esc blur")
+			parts = append(parts, "STOPPED-NORMAL: I insert", maximizeAction, "R reload", "S scrollback", escapeAction)
 		}
 	} else if m.panelInsertMode {
 		parts = append(parts, "INSERT: Esc normal")
 	} else {
-		parts = append(parts, "NORMAL: I insert", "R reload", "S scrollback", "Esc blur")
+		parts = append(parts, "NORMAL: I insert", maximizeAction, "R reload", "S scrollback", escapeAction)
 	}
 
 	parts = append(parts, "†‡ next/prev", "README")
@@ -367,9 +389,19 @@ func (m Model) statusHint() string {
 }
 
 func (m *Model) resizePanels() {
-	cell := layout.CellSizes(m.width, m.gridHeight(), m.grid.Rows, m.grid.Cols)
-	innerW := cell.Width - 2
-	innerH := cell.Height - 3 // border + title
+	if idx, ok := m.visibleMaximizedPanel(); ok {
+		innerW, innerH := m.maximizedPanelInnerSize()
+		if innerW < 1 {
+			innerW = 1
+		}
+		if innerH < 1 {
+			innerH = 1
+		}
+		m.panels[idx].Resize(innerW, innerH)
+		return
+	}
+
+	innerW, innerH := m.gridPanelInnerSize()
 	if innerW < 1 {
 		innerW = 1
 	}
@@ -395,6 +427,9 @@ func (m Model) panelIndexAt(x, y int) (int, bool) {
 	gh := m.gridHeight()
 	if m.height > 1 && y >= gh {
 		return -1, false
+	}
+	if idx, ok := m.visibleMaximizedPanel(); ok {
+		return idx, true
 	}
 
 	cell := layout.CellSizes(m.width, gh, m.grid.Rows, m.grid.Cols)
@@ -462,6 +497,63 @@ func panelSwitchDelta(msg tea.KeyMsg) (delta int, ok bool) {
 		}
 	}
 	return 0, false
+}
+
+func (m *Model) toggleMaximized() {
+	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
+		return
+	}
+	if m.maximizedPanel == m.activePanel {
+		m.maximizedPanel = -1
+	} else {
+		m.maximizedPanel = m.activePanel
+	}
+	m.resizePanels()
+}
+
+func (m Model) visibleMaximizedPanel() (int, bool) {
+	if m.maximizedPanel < 0 || m.maximizedPanel >= len(m.panels) {
+		return -1, false
+	}
+	if m.activePanel != m.maximizedPanel {
+		return -1, false
+	}
+	return m.maximizedPanel, true
+}
+
+func (m Model) gridPanelInnerSize() (int, int) {
+	cell := layout.CellSizes(m.width, m.gridHeight(), m.grid.Rows, m.grid.Cols)
+	return cell.Width - 2, cell.Height - 3
+}
+
+func (m Model) maximizedPanelInnerSize() (int, int) {
+	return m.width - 2, m.gridHeight() - 3
+}
+
+func (m Model) renderStatusLine() string {
+	panelName := "none"
+	if m.activePanel >= 0 && m.activePanel < len(m.panels) {
+		panelName = m.panels[m.activePanel].Name
+	}
+	hint := m.statusHint()
+	mode := m.statusModeLabel()
+	modeFG := m.theme.color(m.theme.StatusModeNoneFG)
+	modeBG := m.theme.color(m.theme.StatusModeNoneBG)
+	switch mode {
+	case "NORMAL":
+		modeFG = m.theme.color(m.theme.StatusModeNormalFG)
+		modeBG = m.theme.color(m.theme.StatusModeNormalBG)
+	case "INSERT":
+		modeFG = m.theme.color(m.theme.StatusModeInsertFG)
+		modeBG = m.theme.color(m.theme.StatusModeInsertBG)
+	}
+	segments := []statusSegment{
+		{Text: time.Now().Format("15:04:05"), FG: m.theme.color(m.theme.StatusTimeFG), BG: m.theme.color(m.theme.StatusTimeBG)},
+		{Text: fmt.Sprintf("active panel: %q", panelName), FG: m.theme.color(m.theme.StatusActivePanelFG), BG: m.theme.color(m.theme.StatusActivePanelBG)},
+		{Text: "MODE: " + mode, FG: modeFG, BG: modeBG},
+		{Text: hint, FG: m.theme.color(m.theme.StatusHintFG), BG: m.theme.color(m.theme.StatusHintBG)},
+	}
+	return renderStatusLine(m.theme, m.width, segments)
 }
 
 func keyMsgToBytes(msg tea.KeyMsg) []byte {
