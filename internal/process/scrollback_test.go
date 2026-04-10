@@ -43,6 +43,13 @@ func TestDetectScrollUpLengthMismatch(t *testing.T) {
 	}
 }
 
+func TestDetectScrollUpRepeatedEmptyLines(t *testing.T) {
+	lines := []string{"a", "", "", ""}
+	if k := detectScrollUp(lines, lines); k != 0 {
+		t.Fatalf("expected 0 for identical repeated lines, got %d", k)
+	}
+}
+
 func TestNormalizeScreen(t *testing.T) {
 	screen := "hello   \nworld  \n   "
 	got := normalizeScreen(screen)
@@ -158,6 +165,29 @@ func TestScrollbackWriterReset(t *testing.T) {
 	}
 }
 
+func TestScrollbackWriterLinesUseInMemorySessionCache(t *testing.T) {
+	dir := t.TempDir()
+	sw := newScrollbackWriter(dir, "cache", 0)
+
+	sw.Capture("a\nb\nc")
+	sw.Capture("b\nc\nd")
+
+	if err := os.Remove(sw.Path()); err != nil {
+		t.Fatalf("remove scrollback file: %v", err)
+	}
+
+	got := sw.Lines()
+	want := []string{"a"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d cached lines, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestSanitizeName(t *testing.T) {
 	tests := []struct {
 		in, want string
@@ -171,6 +201,22 @@ func TestSanitizeName(t *testing.T) {
 	for _, tt := range tests {
 		if got := sanitizeName(tt.in); got != tt.want {
 			t.Errorf("sanitizeName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestMergeHistoryLinesDeduplicatesOverlap(t *testing.T) {
+	scrollback := []string{"a", "b", "c"}
+	screen := []string{"c", "d", "e"}
+
+	got := mergeHistoryLines(scrollback, screen)
+	want := []string{"a", "b", "c", "d", "e"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d merged lines, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d: got %q, want %q", i, got[i], want[i])
 		}
 	}
 }
