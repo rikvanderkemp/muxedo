@@ -9,5 +9,5 @@ cmd = "make worker.acknowledge_queue"
 # Optional: scrollback settings (all fields have sensible defaults)
 # [scrollback]
 # dir = "~/.cache/muxedo/scrollback"   # where log files are stored
-# max_bytes = 1048576                   # max size per panel file (0 = unlimited)
-# editor = "vim"                        # defaults to $EDITOR, then vi
+# max_bytes = 1048576                  # max size per panel file (0 = unlimited)
+# editor = "vim"                       # defaults to $EDITOR, then vi

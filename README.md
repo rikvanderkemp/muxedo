@@ -1,21 +1,21 @@
 # muxedo
 
-A terminal multiplexer TUI that runs commands from a TOML config in a live auto-grid layout.
+A terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.
 
 ## Quick start
 
 ```bash
 go build -o muxedo .
-./muxedo -config config.toml
+./muxedo -profile profile.toml
 ```
 
 Or run directly:
 
 ```bash
-go run . -config config.toml
+go run . -profile profile.toml
 ```
 
-## Config format
+## Profile format
 
 Each `[panel.<name>]` section defines a pane:
 
@@ -66,3 +66,9 @@ editor = "vim"                        # override $EDITOR for scrollback viewing
 Restarting a panel (`R`) clears its scrollback file. Resizing the terminal resets the internal snapshot used for scroll detection but keeps the existing file.
 
 Note: scrollback capture works best with log-style and shell output. Full-screen TUI programs that redraw the entire screen may not produce meaningful scrollback history.
+
+## Muxedo config
+
+Muxedo also looks for an optional app-level config at `~/.config/muxedo/config.toml`.
+
+If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the required profile passed via `-profile`.

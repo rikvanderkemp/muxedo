@@ -9,14 +9,25 @@ import (
 
 	"muxedo/internal/config"
 	"muxedo/internal/process"
+	"muxedo/internal/profile"
 	"muxedo/internal/ui"
 )
 
 func main() {
-	configPath := flag.String("config", "config.toml", "path to TOML config file")
+	profilePath := flag.String("profile", "", "path to TOML profile file")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	if _, err := config.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *profilePath == "" {
+		fmt.Fprintln(os.Stderr, "error: -profile is required")
+		os.Exit(1)
+	}
+
+	cfg, err := profile.Load(*profilePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
