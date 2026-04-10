@@ -43,6 +43,16 @@ func TestDetectScrollUpLengthMismatch(t *testing.T) {
 	}
 }
 
+func TestTrimTrailingEmptyMakesScrollDetectable(t *testing.T) {
+	prev := []string{"a", "b", "c", ""}
+	cur := []string{"b", "c", "d", ""}
+	pt := trimTrailingEmptyStrings(prev)
+	ct := trimTrailingEmptyStrings(cur)
+	if k := detectScrollUp(pt, ct); k != 1 {
+		t.Fatalf("expected k=1 after trim, got %d (pt=%v ct=%v)", k, pt, ct)
+	}
+}
+
 func TestDetectScrollUpRepeatedEmptyLines(t *testing.T) {
 	lines := []string{"a", "", "", ""}
 	if k := detectScrollUp(lines, lines); k != 0 {
@@ -217,6 +227,34 @@ func TestMergeHistoryLinesDeduplicatesOverlap(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("line %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMergeHistoryLineRecordsPrefersFreshScreenText(t *testing.T) {
+	scrollback := []HistoryLine{
+		{ID: 1, Text: "a"},
+		{ID: 2, Text: "b-old"},
+		{ID: 3, Text: "c-old"},
+	}
+	screen := []HistoryLine{
+		{ID: 2, Text: "b-new"},
+		{ID: 3, Text: "c-new"},
+		{ID: 4, Text: "d"},
+	}
+	got := mergeHistoryLineRecords(scrollback, screen)
+	want := []HistoryLine{
+		{ID: 1, Text: "a"},
+		{ID: 2, Text: "b-new"},
+		{ID: 3, Text: "c-new"},
+		{ID: 4, Text: "d"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID || got[i].Text != want[i].Text {
+			t.Fatalf("line %d: got %+v want %+v", i, got[i], want[i])
 		}
 	}
 }

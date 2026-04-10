@@ -115,7 +115,27 @@ func normalizeScreen(screen string) []string {
 	return out
 }
 
-// detectScrollUp returns how many lines scrolled off the top: the largest k
+// trimTrailingEmptyStrings drops trailing "" entries (common when Split leaves
+// a final newline). Mismatched trailing empties make len(prev)!=len(cur) and
+// cause detectScrollUp to bail, which then mis-assigns stable row IDs and
+// shifts scroll marks onto the wrong lines.
+func trimTrailingEmptyStrings(a []string) []string {
+	n := len(a)
+	for n > 0 && a[n-1] == "" {
+		n--
+	}
+	return a[:n]
+}
+
+func trimTrailingEmptyHistory(a []HistoryLine) []HistoryLine {
+	n := len(a)
+	for n > 0 && a[n-1].Text == "" {
+		n--
+	}
+	return a[:n]
+}
+
+// detectScrollUp returns how many lines scrolled off the top: the smallest k
 // such that cur[i] == prev[i+k] for all i in 0..len-k-1.
 func detectScrollUp(prev, cur []string) int {
 	n := len(prev)
@@ -191,9 +211,16 @@ func mergeHistoryLineRecords(scrollback, screen []HistoryLine) []HistoryLine {
 		}
 	}
 
+	// Drop the scrollback tail that duplicates the live screen prefix (matched by ID),
+	// then append the full current screen so in-place row updates keep stable IDs
+	// without leaving stale text from persisted scrollback.
 	merged := make([]HistoryLine, 0, len(scrollback)+len(screen)-overlap)
-	merged = append(merged, scrollback...)
-	merged = append(merged, screen[overlap:]...)
+	if overlap > 0 {
+		merged = append(merged, scrollback[:len(scrollback)-overlap]...)
+	} else {
+		merged = append(merged, scrollback...)
+	}
+	merged = append(merged, screen...)
 	return merged
 }
 
@@ -276,6 +303,7 @@ func parseScrollbackLines(data []byte) []string {
 }
 
 func (sw *scrollbackWriter) syncScreenLocked(screen []string) []HistoryLine {
+	screen = trimTrailingEmptyStrings(screen)
 	if len(screen) == 0 {
 		sw.prev = nil
 		return nil
@@ -284,6 +312,8 @@ func (sw *scrollbackWriter) syncScreenLocked(screen []string) []HistoryLine {
 		sw.prev = sw.makeHistoryLines(screen)
 		return append([]HistoryLine(nil), sw.prev...)
 	}
+
+	sw.prev = trimTrailingEmptyHistory(sw.prev)
 
 	prevText := historyLineTexts(sw.prev)
 	if k := detectScrollUp(prevText, screen); k > 0 {
@@ -302,6 +332,12 @@ func (sw *scrollbackWriter) syncScreenLocked(screen []string) []HistoryLine {
 	for i, text := range screen {
 		if i < len(sw.prev) && sw.prev[i].Text == text {
 			cur[i] = sw.prev[i]
+			continue
+		}
+		if i < len(sw.prev) {
+			// Same terminal row index: keep stable ID so scroll marks survive
+			// repaints, progress output, and empty↔non-empty line transitions.
+			cur[i] = HistoryLine{ID: sw.prev[i].ID, Text: text}
 			continue
 		}
 		cur[i] = sw.newHistoryLine(text)
