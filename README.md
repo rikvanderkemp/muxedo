@@ -1,12 +1,13 @@
 # muxedo
 
 ```text
-+---------------------------+
-| .--.   muxedo    .--.     |
-| |[]|   .-\/-.    |[]|     |
-| |  |   \_  _/    |  |     |
-| '--'     \/      '--'     |
-+---------------------------+
+   .--.
+  |o_o |
+  |:_/ |
+ //   \ \
+(| muxedo |)
+'/'\_ _/`\
+ \___)=(___/
 ```
 
 A terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.

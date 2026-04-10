@@ -7,8 +7,7 @@ workingdir = "~/code/demo-stack"
 cmd = "make worker.acknowledge_queue"
 cmd_kill = "make stop_worker"
 
-# Optional: scrollback settings (all fields have sensible defaults)
+# Optional [scrollback] — omit this section to use defaults (dir: OS cache / muxedo / scrollback; max_bytes: 1 MiB per panel)
 # [scrollback]
-# dir = "~/.cache/muxedo/scrollback"   # where log files are stored
-# max_bytes = 1048576                  # max size per panel file (0 = unlimited)
-# editor = "vim"                       # defaults to $EDITOR, then vi
+# dir = "~/.cache/muxedo/scrollback"   # log file directory (~ expanded)
+# max_bytes = 1048576                  # per-panel cap in bytes; 0 = unlimited
