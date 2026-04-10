@@ -102,7 +102,7 @@ func TestRenderPaneFooterTruncatesTimerToWidth(t *testing.T) {
 }
 
 func TestRenderPaneShortBodyKeepsOutputVisible(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", "hello world", 20, 4, false, false, false, "1s")
+	pane := renderPane(DefaultTheme(), "demo", "hello world", 20, 4, false, false, false, false, nil, "1s")
 	if !strings.Contains(pane, "hello") {
 		t.Fatalf("expected short pane to keep output visible, got %q", pane)
 	}
@@ -151,5 +151,33 @@ func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
 	}
 	if strings.Contains(view, "beta") {
 		t.Fatalf("expected maximized view to hide inactive panel, got %q", view)
+	}
+}
+
+func TestRenderPaneShowsScrollModeTitle(t *testing.T) {
+	pane := renderPane(DefaultTheme(), "demo", "hello", 20, 6, true, false, false, true, nil, "1s")
+	if !strings.Contains(pane, "SCROLL") {
+		t.Fatalf("expected scroll mode title, got %q", pane)
+	}
+}
+
+func TestFitViewportLinesHighlightsSelectedAndMarkedRows(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(oldProfile)
+	})
+
+	lines := fitViewportLines(DefaultTheme(), &paneViewport{
+		Lines:       []string{"one", "two", "three"},
+		SelectedRow: 1,
+		MarkedRow:   2,
+	}, 3, 10)
+
+	if !strings.Contains(lines[1], "\x1b[") {
+		t.Fatalf("expected selected row to be styled, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "\x1b[") {
+		t.Fatalf("expected marked row to be styled, got %q", lines[2])
 	}
 }

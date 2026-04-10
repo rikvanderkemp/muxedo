@@ -1,6 +1,8 @@
 package process
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,5 +139,52 @@ func TestPanelRestartResetsElapsed(t *testing.T) {
 	afterRestart := p.Elapsed()
 	if afterRestart >= 100*time.Millisecond {
 		t.Fatalf("expected elapsed to reset after restart, got %v", afterRestart)
+	}
+}
+
+func TestResetScrollbackClearsPersistedHistory(t *testing.T) {
+	dir := t.TempDir()
+	p := NewWithScrollback("test", "echo hi", ".", dir, 0)
+
+	if err := os.WriteFile(p.ScrollbackPath(), []byte("stale\nhistory\n"), 0o644); err != nil {
+		t.Fatalf("write stale scrollback: %v", err)
+	}
+
+	p.ResetScrollback()
+
+	if _, err := os.Stat(p.ScrollbackPath()); !os.IsNotExist(err) {
+		t.Fatalf("expected reset to remove scrollback file, got err=%v", err)
+	}
+}
+
+func TestHistoryLinesExcludesStaleScrollbackAfterReset(t *testing.T) {
+	dir := t.TempDir()
+	p := NewWithScrollback("test", "echo hi", ".", dir, 0)
+
+	if err := os.WriteFile(p.ScrollbackPath(), []byte("stale\nhistory\n"), 0o644); err != nil {
+		t.Fatalf("write stale scrollback: %v", err)
+	}
+
+	p.ResetScrollback()
+
+	p.termMu.Lock()
+	p.term.Write([]byte("fresh\noutput")) //nolint:errcheck
+	p.termMu.Unlock()
+	if p.sb != nil {
+		p.sb.Capture(p.Output())
+	}
+
+	got := p.HistoryLines()
+	for _, line := range got {
+		if line == "stale" || line == "history" {
+			t.Fatalf("expected stale scrollback to be removed after reset, got %v", got)
+		}
+	}
+	if len(got) < 2 {
+		t.Fatalf("expected current screen lines after reset, got %v", got)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "fresh") || !strings.Contains(joined, "output") {
+		t.Fatalf("expected current output to remain after reset, got %v", got[:min(len(got), 2)])
 	}
 }

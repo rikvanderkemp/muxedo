@@ -15,6 +15,12 @@ type statusSegment struct {
 	BG   lipgloss.Color
 }
 
+type paneViewport struct {
+	Lines       []string
+	SelectedRow int
+	MarkedRow   int
+}
+
 // renderStatusLine renders a single full-width status row.
 func renderStatusLine(theme Theme, width int, segments []statusSegment) string {
 	if width < 1 {
@@ -62,7 +68,7 @@ func renderStatusLine(theme Theme, width int, segments []statusSegment) string {
 }
 
 // insertMode is read only when active is true: green border/title in insert, orange in normal.
-func renderPane(theme Theme, title string, output string, width, height int, active bool, stopped bool, insertMode bool, timer string) string {
+func renderPane(theme Theme, title string, output string, width, height int, active bool, stopped bool, insertMode bool, scrollMode bool, viewport *paneViewport, timer string) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -79,6 +85,8 @@ func renderPane(theme Theme, title string, output string, width, height int, act
 	if active {
 		if insertMode {
 			displayTitle += " · INSERT"
+		} else if scrollMode {
+			displayTitle += " · SCROLL"
 		} else {
 			displayTitle += " · NORMAL"
 		}
@@ -147,8 +155,15 @@ func renderPane(theme Theme, title string, output string, width, height int, act
 	}
 
 	lines := fitLines(output, outLines, innerW)
+	if viewport != nil {
+		lines = fitViewportLines(theme, viewport, outLines, innerW)
+	}
 	if contentH == 1 {
-		lines = fitLines(output, 1, innerW)
+		if viewport != nil {
+			lines = fitViewportLines(theme, viewport, 1, innerW)
+		} else {
+			lines = fitLines(output, 1, innerW)
+		}
 	}
 
 	if contentH == 1 && len(lines) > 0 {
@@ -313,6 +328,39 @@ func fitLines(raw string, n, maxWidth int) []string {
 		}
 	}
 
+	return lines
+}
+
+func fitViewportLines(theme Theme, viewport *paneViewport, n, maxWidth int) []string {
+	lines := make([]string, n)
+	for i := 0; i < n; i++ {
+		line := strings.Repeat(" ", maxWidth)
+		if i < len(viewport.Lines) {
+			line = padOrTruncate(viewport.Lines[i], maxWidth)
+		}
+
+		switch {
+		case i == viewport.SelectedRow && i == viewport.MarkedRow:
+			line = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(theme.color(theme.OverlayFG)).
+				Background(theme.color(theme.ActiveNormalTitleBG)).
+				Render(line)
+		case i == viewport.MarkedRow:
+			line = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(theme.color(theme.OverlayFG)).
+				Background(theme.color(theme.ActiveInsertTitleBG)).
+				Render(line)
+		case i == viewport.SelectedRow:
+			line = lipgloss.NewStyle().
+				Foreground(theme.color(theme.StatusBarFG)).
+				Background(theme.color(theme.StatusActivePanelBG)).
+				Render(line)
+		}
+
+		lines[i] = line
+	}
 	return lines
 }
 

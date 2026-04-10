@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,14 @@ func NewWithScrollback(name, cmd, dir, scrollbackDir string, maxBytes int64) *Pa
 		Dir:  dir,
 		term: vt10x.New(vt10x.WithSize(80, 24)),
 		sb:   newScrollbackWriter(scrollbackDir, name, maxBytes),
+	}
+}
+
+// ResetScrollback clears the persisted scrollback file and in-memory snapshot.
+// It is used at app startup so each muxedo run starts with a clean history.
+func (p *Panel) ResetScrollback() {
+	if p.sb != nil {
+		p.sb.Clear()
 	}
 }
 
@@ -169,6 +178,30 @@ func (p *Panel) ScrollbackPath() string {
 		return ""
 	}
 	return p.sb.Path()
+}
+
+func (p *Panel) HistoryLines() []string {
+	history := p.History()
+	if len(history) == 0 {
+		return nil
+	}
+	out := make([]string, len(history))
+	for i, line := range history {
+		out[i] = line.Text
+	}
+	return out
+}
+
+func (p *Panel) History() []HistoryLine {
+	screen := normalizeScreen(p.Output())
+	if p.sb == nil {
+		out := make([]HistoryLine, len(screen))
+		for i, line := range screen {
+			out[i] = HistoryLine{ID: uint64(i + 1), Text: line}
+		}
+		return out
+	}
+	return p.sb.History(strings.Join(screen, "\n"))
 }
 
 func (p *Panel) WriteInput(data []byte) error {
