@@ -8,11 +8,19 @@ import (
 	"sync"
 )
 
+type HistoryLine struct {
+	ID   uint64
+	Text string
+}
+
 type scrollbackWriter struct {
 	mu       sync.Mutex
 	path     string
 	maxBytes int64
-	prev     []string
+	prev     []HistoryLine
+	lines    []HistoryLine
+	loaded   bool
+	nextID   uint64
 }
 
 func newScrollbackWriter(dir, panelName string, maxBytes int64) *scrollbackWriter {
@@ -47,15 +55,7 @@ func (sw *scrollbackWriter) Capture(screen string) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
-	cur := normalizeScreen(screen)
-
-	if sw.prev != nil {
-		if k := detectScrollUp(sw.prev, cur); k > 0 {
-			sw.appendLines(sw.prev[:k])
-		}
-	}
-
-	sw.prev = cur
+	sw.prev = sw.syncScreenLocked(normalizeScreen(screen))
 }
 
 // Reset clears the in-memory snapshot (e.g. after a resize) but keeps the
@@ -71,12 +71,39 @@ func (sw *scrollbackWriter) Clear() {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	sw.prev = nil
+	sw.lines = nil
+	sw.loaded = true
 	_ = os.Remove(sw.path)
 }
 
 // Path returns the absolute path to the scrollback file.
 func (sw *scrollbackWriter) Path() string {
 	return sw.path
+}
+
+func (sw *scrollbackWriter) History(screen string) []HistoryLine {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	cur := sw.syncScreenLocked(normalizeScreen(screen))
+	if len(sw.lines) == 0 {
+		return append([]HistoryLine(nil), cur...)
+	}
+	if len(cur) == 0 {
+		return append([]HistoryLine(nil), sw.lines...)
+	}
+	return mergeHistoryLineRecords(sw.lines, cur)
+}
+
+func (sw *scrollbackWriter) Lines() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	sw.ensureLinesLoadedLocked()
+	if len(sw.lines) == 0 {
+		return nil
+	}
+	return historyLineTexts(sw.lines)
 }
 
 func normalizeScreen(screen string) []string {
@@ -95,7 +122,7 @@ func detectScrollUp(prev, cur []string) int {
 	if n == 0 || len(cur) != n {
 		return 0
 	}
-	for k := n - 1; k >= 1; k-- {
+	for k := 0; k < n; k++ {
 		match := true
 		for i := 0; i < n-k; i++ {
 			if cur[i] != prev[i+k] {
@@ -110,10 +137,71 @@ func detectScrollUp(prev, cur []string) int {
 	return 0
 }
 
-func (sw *scrollbackWriter) appendLines(lines []string) {
+func mergeHistoryLines(scrollback, screen []string) []string {
+	if len(scrollback) == 0 {
+		return append([]string(nil), screen...)
+	}
+	if len(screen) == 0 {
+		return append([]string(nil), scrollback...)
+	}
+
+	maxOverlap := min(len(scrollback), len(screen))
+	overlap := 0
+	for k := maxOverlap; k >= 1; k-- {
+		match := true
+		for i := 0; i < k; i++ {
+			if scrollback[len(scrollback)-k+i] != screen[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			overlap = k
+			break
+		}
+	}
+
+	merged := make([]string, 0, len(scrollback)+len(screen)-overlap)
+	merged = append(merged, scrollback...)
+	merged = append(merged, screen[overlap:]...)
+	return merged
+}
+
+func mergeHistoryLineRecords(scrollback, screen []HistoryLine) []HistoryLine {
+	if len(scrollback) == 0 {
+		return append([]HistoryLine(nil), screen...)
+	}
+	if len(screen) == 0 {
+		return append([]HistoryLine(nil), scrollback...)
+	}
+
+	maxOverlap := min(len(scrollback), len(screen))
+	overlap := 0
+	for k := maxOverlap; k >= 1; k-- {
+		match := true
+		for i := 0; i < k; i++ {
+			if scrollback[len(scrollback)-k+i].ID != screen[i].ID {
+				match = false
+				break
+			}
+		}
+		if match {
+			overlap = k
+			break
+		}
+	}
+
+	merged := make([]HistoryLine, 0, len(scrollback)+len(screen)-overlap)
+	merged = append(merged, scrollback...)
+	merged = append(merged, screen[overlap:]...)
+	return merged
+}
+
+func (sw *scrollbackWriter) appendLines(lines []HistoryLine) {
 	if len(lines) == 0 {
 		return
 	}
+	sw.ensureLinesLoadedLocked()
 
 	if err := os.MkdirAll(filepath.Dir(sw.path), 0o755); err != nil {
 		return
@@ -126,12 +214,13 @@ func (sw *scrollbackWriter) appendLines(lines []string) {
 
 	var buf bytes.Buffer
 	for _, l := range lines {
-		buf.WriteString(l)
+		buf.WriteString(l.Text)
 		buf.WriteByte('\n')
 	}
 	_, _ = f.Write(buf.Bytes())
 	f.Close()
 
+	sw.lines = append(sw.lines, lines...)
 	sw.trimFile()
 }
 
@@ -160,4 +249,90 @@ func (sw *scrollbackWriter) trimFile() {
 	}
 	trimmed := data[cut+int64(idx)+1:]
 	_ = os.WriteFile(sw.path, trimmed, 0o644)
+	sw.lines = sw.makeHistoryLines(parseScrollbackLines(trimmed))
+	sw.loaded = true
+}
+
+func (sw *scrollbackWriter) ensureLinesLoadedLocked() {
+	if sw.loaded {
+		return
+	}
+	data, err := os.ReadFile(sw.path)
+	if err != nil {
+		sw.lines = nil
+		sw.loaded = true
+		return
+	}
+	sw.lines = sw.makeHistoryLines(parseScrollbackLines(data))
+	sw.loaded = true
+}
+
+func parseScrollbackLines(data []byte) []string {
+	text := strings.TrimRight(string(data), "\n")
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
+
+func (sw *scrollbackWriter) syncScreenLocked(screen []string) []HistoryLine {
+	if len(screen) == 0 {
+		sw.prev = nil
+		return nil
+	}
+	if sw.prev == nil {
+		sw.prev = sw.makeHistoryLines(screen)
+		return append([]HistoryLine(nil), sw.prev...)
+	}
+
+	prevText := historyLineTexts(sw.prev)
+	if k := detectScrollUp(prevText, screen); k > 0 {
+		sw.appendLines(sw.prev[:k])
+
+		cur := make([]HistoryLine, len(screen))
+		copy(cur, sw.prev[k:])
+		for i := len(screen) - k; i < len(screen); i++ {
+			cur[i] = sw.newHistoryLine(screen[i])
+		}
+		sw.prev = cur
+		return append([]HistoryLine(nil), sw.prev...)
+	}
+
+	cur := make([]HistoryLine, len(screen))
+	for i, text := range screen {
+		if i < len(sw.prev) && sw.prev[i].Text == text {
+			cur[i] = sw.prev[i]
+			continue
+		}
+		cur[i] = sw.newHistoryLine(text)
+	}
+	sw.prev = cur
+	return append([]HistoryLine(nil), sw.prev...)
+}
+
+func (sw *scrollbackWriter) makeHistoryLines(lines []string) []HistoryLine {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]HistoryLine, len(lines))
+	for i, line := range lines {
+		out[i] = sw.newHistoryLine(line)
+	}
+	return out
+}
+
+func (sw *scrollbackWriter) newHistoryLine(text string) HistoryLine {
+	sw.nextID++
+	return HistoryLine{ID: sw.nextID, Text: text}
+}
+
+func historyLineTexts(lines []HistoryLine) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = line.Text
+	}
+	return out
 }
