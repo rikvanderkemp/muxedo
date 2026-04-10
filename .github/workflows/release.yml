@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   build-linux:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '!nobuild')) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -46,6 +47,7 @@ jobs:
           path: muxedo_${{ github.run_id }}_*_linux_${{ matrix.goarch }}.tar.gz
 
   build-macos:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '!nobuild')) }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +90,7 @@ jobs:
           path: muxedo_${{ github.run_id }}_*_darwin_arm64.tar.gz
 
   release:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '!nobuild')) }}
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
