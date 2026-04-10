@@ -17,7 +17,8 @@ func main() {
 	profilePath := flag.String("profile", "", "path to TOML profile file")
 	flag.Parse()
 
-	if _, err := config.Load(); err != nil {
+	appConfig, err := config.Load()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -49,7 +50,7 @@ func main() {
 		}
 	}
 
-	model := ui.NewModel(panels, sb.Editor)
+	model := ui.NewModel(panels, sb.Editor, ui.ResolveTheme(appConfig.Theme))
 	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {

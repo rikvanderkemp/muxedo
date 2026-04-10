@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestPadOrTruncateASCII(t *testing.T) {
@@ -68,7 +70,7 @@ func TestFormatElapsed(t *testing.T) {
 }
 
 func TestRenderPaneFooterPlacesTimerOnRight(t *testing.T) {
-	row := renderPaneFooter("", 30, false, "1m30s")
+	row := renderPaneFooter(DefaultTheme(), "", 30, false, "1m30s")
 	if ansi.StringWidth(row) != 30 {
 		t.Fatalf("expected footer width 30, got %d", ansi.StringWidth(row))
 	}
@@ -78,7 +80,7 @@ func TestRenderPaneFooterPlacesTimerOnRight(t *testing.T) {
 }
 
 func TestRenderPaneFooterShowsReloadHintAndTimer(t *testing.T) {
-	row := renderPaneFooter("", 40, true, "2h5m")
+	row := renderPaneFooter(DefaultTheme(), "", 40, true, "2h5m")
 	if !strings.Contains(row, "Press R to reload") {
 		t.Fatalf("expected reload hint in footer, got %q", row)
 	}
@@ -91,18 +93,41 @@ func TestRenderPaneFooterShowsReloadHintAndTimer(t *testing.T) {
 }
 
 func TestRenderPaneFooterTruncatesTimerToWidth(t *testing.T) {
-	row := renderPaneFooter("", 4, false, "1m30s")
+	row := renderPaneFooter(DefaultTheme(), "", 4, false, "1m30s")
 	if ansi.StringWidth(row) != 4 {
 		t.Fatalf("expected footer width 4, got %d", ansi.StringWidth(row))
 	}
 }
 
 func TestRenderPaneShortBodyKeepsOutputVisible(t *testing.T) {
-	pane := renderPane("demo", "hello world", 20, 4, false, false, false, "1s")
+	pane := renderPane(DefaultTheme(), "demo", "hello world", 20, 4, false, false, false, "1s")
 	if !strings.Contains(pane, "hello") {
 		t.Fatalf("expected short pane to keep output visible, got %q", pane)
 	}
 	if !strings.Contains(pane, "1s") {
 		t.Fatalf("expected short pane to show timer, got %q", pane)
+	}
+}
+
+func TestRenderStatusLineUsesThemeColors(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(oldProfile)
+	})
+
+	theme := DefaultTheme()
+	theme.StatusBarFG = "#112233"
+	theme.StatusBarBG = "#445566"
+
+	row := renderStatusLine(theme, 24, []statusSegment{
+		{Text: "demo", FG: theme.color("#abcdef"), BG: theme.color("#123456")},
+	})
+
+	if !strings.Contains(row, "38;2;17;34;51") {
+		t.Fatalf("expected status bar fg truecolor escape in %q", row)
+	}
+	if !strings.Contains(row, "48;2;68;85;102") {
+		t.Fatalf("expected status bar bg truecolor escape in %q", row)
 	}
 }

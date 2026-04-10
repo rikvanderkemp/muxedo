@@ -15,70 +15,8 @@ type statusSegment struct {
 	BG   lipgloss.Color
 }
 
-var (
-	// Inactive, running: muted blue so it reads as "alive but unfocused".
-	inactiveBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("67"))
-
-	inactiveTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("252")).
-				Background(lipgloss.Color("60")).
-				Padding(0, 1)
-
-	// Active pane: orange = normal mode, green = insert (keys go to PTY).
-	activeNormalBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("208"))
-
-	activeInsertBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("46"))
-
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("62")).
-			Padding(0, 1)
-
-	activeNormalTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("208")).
-				Padding(0, 1)
-
-	activeInsertTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("34")).
-				Padding(0, 1)
-
-	// Stopped process: neutral grey (focused or not).
-	stoppedBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("240"))
-
-	stoppedTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("245")).
-				Background(lipgloss.Color("238")).
-				Padding(0, 1)
-
-	overlayStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("238")).
-			Padding(0, 1)
-
-	statusBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")).
-			Background(lipgloss.Color("235")).
-			Padding(0, 1)
-)
-
 // renderStatusLine renders a single full-width status row.
-func renderStatusLine(width int, segments []statusSegment) string {
+func renderStatusLine(theme Theme, width int, segments []statusSegment) string {
 	if width < 1 {
 		return ""
 	}
@@ -115,11 +53,16 @@ func renderStatusLine(width int, segments []statusSegment) string {
 		content += strings.Repeat(" ", inner-w)
 	}
 
+	statusBarStyle := lipgloss.NewStyle().
+		Foreground(theme.color(theme.StatusBarFG)).
+		Background(theme.color(theme.StatusBarBG)).
+		Padding(0, 1)
+
 	return statusBarStyle.Width(width).MaxWidth(width).Render(content)
 }
 
 // insertMode is read only when active is true: green border/title in insert, orange in normal.
-func renderPane(title string, output string, width, height int, active bool, stopped bool, insertMode bool, timer string) string {
+func renderPane(theme Theme, title string, output string, width, height int, active bool, stopped bool, insertMode bool, timer string) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -146,23 +89,47 @@ func renderPane(title string, output string, width, height int, active bool, sto
 	var titleSeparatorRenderer lipgloss.Style
 	switch {
 	case stopped:
-		titleRenderer = stoppedTitleStyle
-		borderRenderer = stoppedBorderStyle
-		titleSeparatorRenderer = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+		titleRenderer = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(theme.color(theme.StoppedTitleFG)).
+			Background(theme.color(theme.StoppedTitleBG)).
+			Padding(0, 1)
+		borderRenderer = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(theme.color(theme.StoppedBorder))
+		titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.StoppedTitleBG))
 	case active:
 		if insertMode {
-			titleRenderer = activeInsertTitleStyle
-			borderRenderer = activeInsertBorderStyle
-			titleSeparatorRenderer = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
+			titleRenderer = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(theme.color(theme.ActiveInsertTitleFG)).
+				Background(theme.color(theme.ActiveInsertTitleBG)).
+				Padding(0, 1)
+			borderRenderer = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(theme.color(theme.ActiveInsertBorder))
+			titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.ActiveInsertTitleBG))
 		} else {
-			titleRenderer = activeNormalTitleStyle
-			borderRenderer = activeNormalBorderStyle
-			titleSeparatorRenderer = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+			titleRenderer = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(theme.color(theme.ActiveNormalTitleFG)).
+				Background(theme.color(theme.ActiveNormalTitleBG)).
+				Padding(0, 1)
+			borderRenderer = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(theme.color(theme.ActiveNormalBorder))
+			titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.ActiveNormalTitleBG))
 		}
 	default:
-		titleRenderer = inactiveTitleStyle
-		borderRenderer = inactiveBorderStyle
-		titleSeparatorRenderer = lipgloss.NewStyle().Foreground(lipgloss.Color("60"))
+		titleRenderer = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(theme.color(theme.InactiveTitleFG)).
+			Background(theme.color(theme.InactiveTitleBG)).
+			Padding(0, 1)
+		borderRenderer = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(theme.color(theme.InactiveBorder))
+		titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.InactiveTitleBG))
 	}
 
 	titleChip := titleRenderer.Render(displayTitle)
@@ -185,12 +152,12 @@ func renderPane(title string, output string, width, height int, active bool, sto
 	}
 
 	if contentH == 1 && len(lines) > 0 {
-		lines[len(lines)-1] = renderPaneFooter(lines[len(lines)-1], innerW, reloadHint, timer)
+		lines[len(lines)-1] = renderPaneFooter(theme, lines[len(lines)-1], innerW, reloadHint, timer)
 	}
 
 	content := strings.Join(lines, "\n")
 	if useDedicatedFooterRow {
-		content += "\n" + renderPaneFooter("", innerW, reloadHint, timer)
+		content += "\n" + renderPaneFooter(theme, "", innerW, reloadHint, timer)
 	}
 
 	inner := titleBar + "\n" + content
@@ -205,7 +172,7 @@ func renderPane(title string, output string, width, height int, active bool, sto
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, box)
 }
 
-func renderEmptyPane(width, height int) string {
+func renderEmptyPane(theme Theme, width, height int) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -214,21 +181,28 @@ func renderEmptyPane(width, height int) string {
 	if innerH < 1 {
 		innerH = 1
 	}
-	box := inactiveBorderStyle.
+	box := lipgloss.NewStyle().
 		Width(innerW).
 		Height(innerH).
 		MaxWidth(width).
 		MaxHeight(height).
-		BorderForeground(lipgloss.Color("236")).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(theme.color(theme.EmptyBorder)).
 		Render("")
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, box)
 }
 
-func renderPaneFooter(base string, width int, reloadHint bool, timer string) string {
+func renderPaneFooter(theme Theme, base string, width int, reloadHint bool, timer string) string {
 	if width < 1 {
 		return ""
 	}
 	base = padOrTruncate(base, width)
+
+	overlayStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(theme.color(theme.OverlayFG)).
+		Background(theme.color(theme.OverlayBG)).
+		Padding(0, 1)
 
 	left := ""
 	if reloadHint {

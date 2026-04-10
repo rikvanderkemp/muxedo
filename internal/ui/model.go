@@ -18,6 +18,7 @@ type tickMsg time.Time
 
 type Model struct {
 	panels           []*process.Panel
+	theme            Theme
 	width            int
 	height           int
 	grid             layout.Grid
@@ -33,9 +34,15 @@ type Model struct {
 	openEditor       func(editor, path string) tea.Cmd
 }
 
-func NewModel(panels []*process.Panel, editor string) Model {
+func NewModel(panels []*process.Panel, editor string, themes ...Theme) Model {
+	theme := DefaultTheme()
+	if len(themes) > 0 {
+		theme = themes[0]
+	}
+
 	return Model{
 		panels:      panels,
+		theme:       theme,
 		grid:        layout.Compute(len(panels)),
 		activePanel: -1,
 		editor:      editor,
@@ -271,6 +278,7 @@ func (m Model) View() string {
 				out := p.Output()
 				stopped := !m.panelRunning(p)
 				pane := renderPane(
+					m.theme,
 					p.Name,
 					out,
 					cell.Width,
@@ -282,7 +290,7 @@ func (m Model) View() string {
 				)
 				cols = append(cols, pane)
 			} else {
-				empty := renderEmptyPane(cell.Width, cell.Height)
+				empty := renderEmptyPane(m.theme, cell.Width, cell.Height)
 				cols = append(cols, empty)
 			}
 			idx++
@@ -299,20 +307,23 @@ func (m Model) View() string {
 		}
 		hint := m.statusHint()
 		mode := m.statusModeLabel()
-		modeBG := lipgloss.Color("240")
+		modeFG := m.theme.color(m.theme.StatusModeNoneFG)
+		modeBG := m.theme.color(m.theme.StatusModeNoneBG)
 		switch mode {
 		case "NORMAL":
-			modeBG = lipgloss.Color("208")
+			modeFG = m.theme.color(m.theme.StatusModeNormalFG)
+			modeBG = m.theme.color(m.theme.StatusModeNormalBG)
 		case "INSERT":
-			modeBG = lipgloss.Color("34")
+			modeFG = m.theme.color(m.theme.StatusModeInsertFG)
+			modeBG = m.theme.color(m.theme.StatusModeInsertBG)
 		}
 		segments := []statusSegment{
-			{Text: time.Now().Format("15:04:05"), FG: lipgloss.Color("230"), BG: lipgloss.Color("60")},
-			{Text: fmt.Sprintf("active panel: %q", panelName), FG: lipgloss.Color("230"), BG: lipgloss.Color("62")},
-			{Text: "MODE: " + mode, FG: lipgloss.Color("230"), BG: modeBG},
-			{Text: hint, FG: lipgloss.Color("252"), BG: lipgloss.Color("238")},
+			{Text: time.Now().Format("15:04:05"), FG: m.theme.color(m.theme.StatusTimeFG), BG: m.theme.color(m.theme.StatusTimeBG)},
+			{Text: fmt.Sprintf("active panel: %q", panelName), FG: m.theme.color(m.theme.StatusActivePanelFG), BG: m.theme.color(m.theme.StatusActivePanelBG)},
+			{Text: "MODE: " + mode, FG: modeFG, BG: modeBG},
+			{Text: hint, FG: m.theme.color(m.theme.StatusHintFG), BG: m.theme.color(m.theme.StatusHintBG)},
 		}
-		statusRendered := renderStatusLine(m.width, segments)
+		statusRendered := renderStatusLine(m.theme, m.width, segments)
 		body = lipgloss.JoinVertical(lipgloss.Left, body, statusRendered)
 	}
 
