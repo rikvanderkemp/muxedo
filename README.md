@@ -1,5 +1,14 @@
 # muxedo
 
+```text
++---------------------------+
+| .--.   muxedo    .--.     |
+| |[]|   .-\/-.    |[]|     |
+| |  |   \_  _/    |  |     |
+| '--'     \/      '--'     |
++---------------------------+
+```
+
 A terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.
 
 ## Quick start
