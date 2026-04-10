@@ -141,6 +141,28 @@ func TestEscapeFromNormalBlursPanel(t *testing.T) {
 	}
 }
 
+func TestEscapeFromMaximizedNormalRestoresGridAndBlursPanel(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.maximizedPanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(Model)
+
+	if model.activePanel != -1 {
+		t.Fatalf("expected no active panel, got %d", model.activePanel)
+	}
+	if model.maximizedPanel != -1 {
+		t.Fatalf("expected maximize cleared, got %d", model.maximizedPanel)
+	}
+	if model.panelInsertMode {
+		t.Fatal("expected panelInsertMode false after blur")
+	}
+}
+
 func TestEscapeTrickleInsertToNormalThenBlur(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "."),
@@ -341,6 +363,34 @@ func TestRunningPanelForwardsAfterInsert(t *testing.T) {
 	}
 }
 
+func TestRunningPanelForwardsMInInsertMode(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+
+	var writes [][]byte
+	model.sendInput = func(_ *process.Panel, data []byte) error {
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		writes = append(writes, cp)
+		return nil
+	}
+	model.panelRunning = func(p *process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	model = next.(Model)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+
+	if model.maximizedPanel != -1 {
+		t.Fatalf("expected maximize unchanged in insert mode, got %d", model.maximizedPanel)
+	}
+	if len(writes) != 1 || string(writes[0]) != "m" {
+		t.Fatalf("expected 'm' forwarded in insert mode, got %v", writes)
+	}
+}
+
 func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "."),
@@ -469,6 +519,96 @@ func TestCtrlONoopWithoutActivePanel(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatal("expected nil cmd when no panel is active")
+	}
+}
+
+func TestMWithoutActivePanelDoesNothing(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected nil cmd when no panel is active")
+	}
+	if model.maximizedPanel != -1 {
+		t.Fatalf("expected no maximized panel, got %d", model.maximizedPanel)
+	}
+}
+
+func TestMFocusedNormalTogglesMaximize(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.maximizedPanel != 0 {
+		t.Fatalf("expected panel 0 maximized, got %d", model.maximizedPanel)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.maximizedPanel != -1 {
+		t.Fatalf("expected maximize cleared, got %d", model.maximizedPanel)
+	}
+}
+
+func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
+	panels := []*process.Panel{
+		process.New("one", "echo one", "."),
+		process.New("two", "echo two", "."),
+	}
+	model := NewModel(panels, "vi")
+	model.activePanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	model = next.(Model)
+
+	gridCols0, gridRows0 := panels[0].TerminalSize()
+	gridCols1, gridRows1 := panels[1].TerminalSize()
+	if gridCols0 != 58 || gridRows0 != 36 || gridCols1 != 58 || gridRows1 != 36 {
+		t.Fatalf("unexpected grid sizes: p0=%dx%d p1=%dx%d", gridCols0, gridRows0, gridCols1, gridRows1)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+
+	maxCols0, maxRows0 := panels[0].TerminalSize()
+	maxCols1, maxRows1 := panels[1].TerminalSize()
+	if maxCols0 != 118 || maxRows0 != 36 {
+		t.Fatalf("expected maximized panel resized to 118x36, got %dx%d", maxCols0, maxRows0)
+	}
+	if maxCols1 != gridCols1 || maxRows1 != gridRows1 {
+		t.Fatalf("expected hidden panel to keep grid size, got %dx%d", maxCols1, maxRows1)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+
+	restoreCols0, restoreRows0 := panels[0].TerminalSize()
+	restoreCols1, restoreRows1 := panels[1].TerminalSize()
+	if restoreCols0 != 58 || restoreRows0 != 36 || restoreCols1 != 58 || restoreRows1 != 36 {
+		t.Fatalf("expected both panels restored to grid size, got p0=%dx%d p1=%dx%d", restoreCols0, restoreRows0, restoreCols1, restoreRows1)
+	}
+}
+
+func TestStoppedPanelNormalMTogglesMaximize(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelRunning = func(*process.Panel) bool { return false }
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.maximizedPanel != 0 {
+		t.Fatalf("expected panel 0 maximized, got %d", model.maximizedPanel)
 	}
 }
 
@@ -604,6 +744,26 @@ func TestAltTWhenFocusedCycles(t *testing.T) {
 	}
 }
 
+func TestAltTWhenMaximizedKeepsSinglePanelMode(t *testing.T) {
+	panels := []*process.Panel{
+		process.New("a", "echo a", "."),
+		process.New("b", "echo b", "."),
+	}
+	model := NewModel(panels, "vi")
+	model.activePanel = 0
+	model.maximizedPanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
+	model = next.(Model)
+	if model.activePanel != 1 {
+		t.Fatalf("Alt+t: want panel 1, got %d", model.activePanel)
+	}
+	if model.maximizedPanel != 1 {
+		t.Fatalf("Alt+t: want maximized panel 1, got %d", model.maximizedPanel)
+	}
+}
+
 func TestPanelShortcutInactiveAlwaysSelectsFirst(t *testing.T) {
 	panels := []*process.Panel{
 		process.New("a", "echo a", "."),
@@ -732,8 +892,28 @@ func TestStatusHintRunningNormalShowsNormalShortcuts(t *testing.T) {
 	if !strings.Contains(hint, "NORMAL: I insert") {
 		t.Fatalf("expected normal status hint, got: %q", hint)
 	}
+	if !strings.Contains(hint, "M maximize") {
+		t.Fatalf("expected normal hint to mention maximize, got: %q", hint)
+	}
 	if !strings.Contains(hint, "Esc blur") {
 		t.Fatalf("expected normal hint to mention Esc blur, got: %q", hint)
+	}
+}
+
+func TestStatusHintMaximizedShowsRestoreShortcut(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.maximizedPanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	hint := model.statusHint()
+	if !strings.Contains(hint, "M restore") {
+		t.Fatalf("expected maximized status hint, got: %q", hint)
+	}
+	if !strings.Contains(hint, "Esc restore+blur") {
+		t.Fatalf("expected maximized hint to mention restore+blur, got: %q", hint)
 	}
 }
 

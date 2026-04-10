@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+
+	"muxedo/internal/process"
 )
 
 func TestPadOrTruncateASCII(t *testing.T) {
@@ -129,5 +131,25 @@ func TestRenderStatusLineUsesThemeColors(t *testing.T) {
 	}
 	if !strings.Contains(row, "48;2;68;85;102") {
 		t.Fatalf("expected status bar bg truecolor escape in %q", row)
+	}
+}
+
+func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("alpha", "echo alpha", "."),
+		process.New("beta", "echo beta", "."),
+	}, "vi")
+	model.width = 80
+	model.height = 20
+	model.activePanel = 0
+	model.maximizedPanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	view := model.View()
+	if !strings.Contains(view, "alpha") {
+		t.Fatalf("expected maximized view to include active panel, got %q", view)
+	}
+	if strings.Contains(view, "beta") {
+		t.Fatalf("expected maximized view to hide inactive panel, got %q", view)
 	}
 }

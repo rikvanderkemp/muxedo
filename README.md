@@ -54,7 +54,9 @@ Panels are arranged in an auto-grid (near-square) layout that fills the terminal
 - **Vim-style panel modes** (after you focus a panel, you start in **normal** mode):
   - **`i`** or **`I`** — **insert** mode: keys (including `q`, `Ctrl+C`, etc.) are sent to the panel process, like a typical focused terminal.
   - **`Esc`** — **trickle**: from insert, first **`Esc`** returns to **normal**; from **normal**, **`Esc`** unfocuses the panel. (**`Ctrl+[`** is the same byte as **`Esc`** in a TTY, so it follows the same rule — it cannot mean “previous panel”.)
-  - In **normal** mode: **`r`** / **`R`** reloads (restarts) the panel command; **`s`** / **`S`** or **`Ctrl+O`** opens the scrollback log in your editor when scrollback is enabled (see below). Other keys are not sent to the panel.
+  - In **normal** mode: **`m`** / **`M`** toggles maximize for the focused panel; **`r`** / **`R`** reloads (restarts) the panel command; **`s`** / **`S`** or **`Ctrl+O`** opens the scrollback log in your editor when scrollback is enabled (see below). Other keys are not sent to the panel.
+- While a panel is maximized, next/prev panel shortcuts keep the single-panel view and switch which panel is shown.
+- Pressing **`Esc`** from maximized **normal** mode restores the grid and clears focus.
 - When a panel process exits, the panel shows a "Press R to reload" overlay. In **normal** mode, press **`R`** (or **`r`**) to restart the command.
 - `q` or `Ctrl+C` — quit and stop all subprocesses (only when no panel is active).
 
