@@ -22,7 +22,7 @@ type Model struct {
 	height           int
 	grid             layout.Grid
 	activePanel      int
-	panelInsertMode  bool // when a panel is focused: false = normal (vim-like), true = keys go to PTY
+	panelInsertMode  bool   // when a panel is focused: false = normal (vim-like), true = keys go to PTY
 	prevPanelRunning []bool // per-panel running state last tick; detects run→stop while focused
 	afterGForTab     bool   // saw "g", expect "t"/"T" (vim :tabnext / :tabprev) when no panel focused
 	vimTabClearAt    time.Time
@@ -270,7 +270,16 @@ func (m Model) View() string {
 				p := m.panels[idx]
 				out := p.Output()
 				stopped := !m.panelRunning(p)
-				pane := renderPane(p.Name, out, cell.Width, cell.Height, idx == m.activePanel, stopped, m.panelInsertMode)
+				pane := renderPane(
+					p.Name,
+					out,
+					cell.Width,
+					cell.Height,
+					idx == m.activePanel,
+					stopped,
+					m.panelInsertMode,
+					formatElapsed(p.Elapsed()),
+				)
 				cols = append(cols, pane)
 			} else {
 				empty := renderEmptyPane(cell.Width, cell.Height)

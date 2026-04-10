@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -117,7 +119,7 @@ func renderStatusLine(width int, segments []statusSegment) string {
 }
 
 // insertMode is read only when active is true: green border/title in insert, orange in normal.
-func renderPane(title string, output string, width, height int, active bool, stopped bool, insertMode bool) string {
+func renderPane(title string, output string, width, height int, active bool, stopped bool, insertMode bool, timer string) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -172,21 +174,23 @@ func renderPane(title string, output string, width, height int, active bool, sto
 
 	reloadHint := stopped && active
 	outLines := contentH
-	if reloadHint && outLines > 0 {
+	useDedicatedFooterRow := contentH > 1
+	if useDedicatedFooterRow {
 		outLines--
 	}
 
 	lines := fitLines(output, outLines, innerW)
+	if contentH == 1 {
+		lines = fitLines(output, 1, innerW)
+	}
+
+	if contentH == 1 && len(lines) > 0 {
+		lines[len(lines)-1] = renderPaneFooter(lines[len(lines)-1], innerW, reloadHint, timer)
+	}
+
 	content := strings.Join(lines, "\n")
-	if reloadHint {
-		if outLines > 0 {
-			hint := overlayStyle.Render("Press R to reload")
-			hintRow := lipgloss.Place(innerW, 1, lipgloss.Center, lipgloss.Center, hint)
-			content = content + "\n" + hintRow
-		} else {
-			hint := overlayStyle.Render("Press R to reload")
-			content = lipgloss.Place(innerW, contentH, lipgloss.Center, lipgloss.Center, hint)
-		}
+	if useDedicatedFooterRow {
+		content += "\n" + renderPaneFooter("", innerW, reloadHint, timer)
 	}
 
 	inner := titleBar + "\n" + content
@@ -218,6 +222,102 @@ func renderEmptyPane(width, height int) string {
 		BorderForeground(lipgloss.Color("236")).
 		Render("")
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, box)
+}
+
+func renderPaneFooter(base string, width int, reloadHint bool, timer string) string {
+	if width < 1 {
+		return ""
+	}
+	base = padOrTruncate(base, width)
+
+	left := ""
+	if reloadHint {
+		left = overlayStyle.Render("Press R to reload")
+	}
+
+	right := ""
+	if timer != "" {
+		right = overlayStyle.Render(timer)
+	}
+
+	leftWidth := ansi.StringWidth(left)
+	rightWidth := ansi.StringWidth(right)
+
+	switch {
+	case left == "" && right == "":
+		return base
+	case left == "":
+		if rightWidth >= width {
+			return ansi.Truncate(right, width, "")
+		}
+		prefixWidth := width - rightWidth
+		prefix := ansi.Truncate(base, prefixWidth, "")
+		prefix = padOrTruncate(prefix, prefixWidth)
+		return prefix + right
+	case right == "":
+		left = padOrTruncate(left, width)
+		leftWidth = ansi.StringWidth(left)
+		if leftWidth < width {
+			return left + ansi.Truncate(base, width-leftWidth, "")
+		}
+		return left
+	}
+
+	if leftWidth+1+rightWidth <= width {
+		return left + strings.Repeat(" ", width-leftWidth-rightWidth) + right
+	}
+
+	leftBudget := width - rightWidth - 1
+	if leftBudget < 0 {
+		leftBudget = 0
+	}
+	left = ansi.Truncate(left, leftBudget, "")
+	leftWidth = ansi.StringWidth(left)
+	if leftWidth+rightWidth < width {
+		return left + strings.Repeat(" ", width-leftWidth-rightWidth) + right
+	}
+	if rightWidth > width {
+		return ansi.Truncate(right, width, "")
+	}
+	return left + right
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+
+	totalSeconds := int(d / time.Second)
+	days := totalSeconds / (24 * 60 * 60)
+	totalSeconds %= 24 * 60 * 60
+	hours := totalSeconds / (60 * 60)
+	totalSeconds %= 60 * 60
+	minutes := totalSeconds / 60
+	seconds := totalSeconds % 60
+
+	switch {
+	case days > 0:
+		if hours > 0 {
+			return formatUnit(days, "d") + formatUnit(hours, "h")
+		}
+		return formatUnit(days, "d")
+	case hours > 0:
+		if minutes > 0 {
+			return formatUnit(hours, "h") + formatUnit(minutes, "m")
+		}
+		return formatUnit(hours, "h")
+	case minutes > 0:
+		if seconds > 0 {
+			return formatUnit(minutes, "m") + formatUnit(seconds, "s")
+		}
+		return formatUnit(minutes, "m")
+	default:
+		return formatUnit(seconds, "s")
+	}
+}
+
+func formatUnit(value int, suffix string) string {
+	return strconv.Itoa(value) + suffix
 }
 
 // fitLines takes the VT screen dump and returns exactly `n` lines,
