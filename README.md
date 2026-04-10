@@ -81,3 +81,38 @@ Note: scrollback capture works best with log-style and shell output. Full-screen
 Muxedo also looks for an optional app-level config at `~/.config/muxedo/config.toml`.
 
 If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the required profile passed via `-profile`.
+
+You can also add a `[theme]` section to override the UI colors. Hex values are the intended format for themers, and muxedo will let the terminal renderer degrade them automatically on lower-color terminals. ANSI numeric strings still work too.
+
+```toml
+[theme]
+inactive_border = "#5f87af"
+inactive_title_fg = "#d0d0d0"
+inactive_title_bg = "#5f5f87"
+active_normal_border = "#ff8700"
+active_normal_title_fg = "#ffffd7"
+active_normal_title_bg = "#ff8700"
+active_insert_border = "#00ff00"
+active_insert_title_fg = "#ffffd7"
+active_insert_title_bg = "#00af00"
+stopped_border = "#585858"
+stopped_title_fg = "#8a8a8a"
+stopped_title_bg = "#444444"
+empty_border = "#303030"
+overlay_fg = "#ffffd7"
+overlay_bg = "#444444"
+status_bar_fg = "#d0d0d0"
+status_bar_bg = "#262626"
+status_time_fg = "#ffffd7"
+status_time_bg = "#5f5f87"
+status_active_panel_fg = "#ffffd7"
+status_active_panel_bg = "#5f5fd7"
+status_mode_none_fg = "#ffffd7"
+status_mode_none_bg = "#585858"
+status_mode_normal_fg = "#ffffd7"
+status_mode_normal_bg = "#ff8700"
+status_mode_insert_fg = "#ffffd7"
+status_mode_insert_bg = "#00af00"
+status_hint_fg = "#d0d0d0"
+status_hint_bg = "#444444"
+```
