@@ -2,8 +2,10 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,9 +15,10 @@ import (
 )
 
 type Panel struct {
-	Name string
-	Cmd  string
-	Dir  string
+	Name    string
+	Cmd     string
+	CmdKill string
+	Dir     string
 
 	ptmx       *os.File
 	cmd        *exec.Cmd
@@ -36,22 +39,24 @@ type Panel struct {
 
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
 
-func New(name, cmd, dir string) *Panel {
+func New(name, cmd, cmdKill, dir string) *Panel {
 	return &Panel{
-		Name: name,
-		Cmd:  cmd,
-		Dir:  dir,
-		term: vt10x.New(vt10x.WithSize(80, 24)),
+		Name:    name,
+		Cmd:     cmd,
+		CmdKill: cmdKill,
+		Dir:     dir,
+		term:    vt10x.New(vt10x.WithSize(80, 24)),
 	}
 }
 
-func NewWithScrollback(name, cmd, dir, scrollbackDir string, maxBytes int64) *Panel {
+func NewWithScrollback(name, cmd, cmdKill, dir, scrollbackDir string, maxBytes int64) *Panel {
 	return &Panel{
-		Name: name,
-		Cmd:  cmd,
-		Dir:  dir,
-		term: vt10x.New(vt10x.WithSize(80, 24)),
-		sb:   newScrollbackWriter(scrollbackDir, name, maxBytes),
+		Name:    name,
+		Cmd:     cmd,
+		CmdKill: cmdKill,
+		Dir:     dir,
+		term:    vt10x.New(vt10x.WithSize(80, 24)),
+		sb:      newScrollbackWriter(scrollbackDir, name, maxBytes),
 	}
 }
 
@@ -66,7 +71,7 @@ func (p *Panel) ResetScrollback() {
 func (p *Panel) Start() error {
 	c := exec.Command("sh", "-lc", p.Cmd)
 	c.Dir = p.Dir
-	c.Env = os.Environ()
+	c.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
 
 	ptmx, err := pty.Start(c)
 	if err != nil {
@@ -94,7 +99,7 @@ func (p *Panel) readLoop() {
 			p.appendHistory(buf[:n])
 			p.termMu.Lock()
 			p.term.Write(buf[:n]) //nolint:errcheck
-			termSnap := p.term.String()
+			termSnap := p.viewSnapshotLocked()
 			p.termMu.Unlock()
 			p.markDisplayDirty()
 			if p.sb != nil {
@@ -109,9 +114,7 @@ func (p *Panel) readLoop() {
 }
 
 func (p *Panel) Output() string {
-	p.termMu.RLock()
-	defer p.termMu.RUnlock()
-	return p.term.String()
+	return p.viewSnapshot()
 }
 
 func (p *Panel) Resize(cols, rows int) {
@@ -151,7 +154,18 @@ func (p *Panel) Stop() {
 	}
 }
 
+func (p *Panel) RunCmdKill() {
+	if p.CmdKill == "" {
+		return
+	}
+	c := exec.Command("sh", "-lc", p.CmdKill)
+	c.Dir = p.Dir
+	c.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
+	_ = c.Run()
+}
+
 func (p *Panel) Restart() error {
+	p.RunCmdKill()
 	p.Stop()
 	p.termMu.Lock()
 	p.term = vt10x.New(vt10x.WithSize(80, 24))
@@ -289,9 +303,7 @@ func (p *Panel) DisplayForView() string {
 		}
 		p.displayMu.Unlock()
 
-		p.termMu.RLock()
-		s := p.term.String()
-		p.termMu.RUnlock()
+		s := p.viewSnapshot()
 
 		p.displayMu.Lock()
 		if !p.displayDirty {
@@ -314,4 +326,53 @@ func (p *Panel) DisplayForView() string {
 		}
 		return out
 	}
+}
+
+func (p *Panel) viewSnapshotLocked() string {
+	cols, rows := p.term.Size()
+	var b strings.Builder
+
+	for y := 0; y < rows; y++ {
+		// Find the last non-space/non-zero cell in this row for trimming
+		lastNonEmpty := -1
+		for x := cols - 1; x >= 0; x-- {
+			glyph := p.term.Cell(x, y)
+			if glyph.Char != 0 && glyph.Char != ' ' {
+				lastNonEmpty = x
+				break
+			}
+		}
+
+		var lastFG, lastBG vt10x.Color = vt10x.DefaultFG, vt10x.DefaultBG
+		for x := 0; x <= lastNonEmpty; x++ {
+			glyph := p.term.Cell(x, y)
+			if glyph.FG != lastFG || glyph.BG != lastBG {
+				b.WriteString("\x1b[0")
+				if glyph.FG != vt10x.DefaultFG {
+					b.WriteString(fmt.Sprintf(";38;5;%d", glyph.FG))
+				}
+				if glyph.BG != vt10x.DefaultBG {
+					b.WriteString(fmt.Sprintf(";48;5;%d", glyph.BG))
+				}
+				b.WriteString("m")
+				lastFG, lastBG = glyph.FG, glyph.BG
+			}
+			char := glyph.Char
+			if char == 0 {
+				char = ' '
+			}
+			b.WriteRune(char)
+		}
+		b.WriteString("\x1b[0m")
+		if y < rows-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func (p *Panel) viewSnapshot() string {
+	p.termMu.RLock()
+	defer p.termMu.RUnlock()
+	return p.viewSnapshotLocked()
 }

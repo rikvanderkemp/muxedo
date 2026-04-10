@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -16,6 +14,22 @@ import (
 
 type tickMsg time.Time
 
+type exitProgressMsg struct {
+	panelIdx int
+	status   string
+}
+
+func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
+	return func() tea.Msg {
+		p.RunCmdKill()
+		p.Stop()
+		return exitProgressMsg{
+			panelIdx: idx,
+			status:   fmt.Sprintf("exiting panel %s.... exiting completed...", p.Name),
+		}
+	}
+}
+
 type Model struct {
 	panels           []*process.Panel
 	theme            Theme
@@ -27,20 +41,19 @@ type Model struct {
 	panelInsertMode  bool // when a panel is focused: false = normal (vim-like), true = keys go to PTY
 	panelScrollMode  bool
 	prevPanelRunning []bool // per-panel running state last tick; detects run→stop while focused
-	afterGForTab     bool   // saw "g", expect "t"/"T" (vim :tabnext / :tabprev) when no panel focused
-	vimTabClearAt    time.Time
-	editor           string
 	scrollOffsets    []int
 	scrollSelections []int
 	scrollMarks      []uint64
 	sendInput        func(*process.Panel, []byte) error
 	panelRunning     func(*process.Panel) bool
 	restartPanel     func(*process.Panel) error
-	openEditor       func(editor, path string) tea.Cmd
 	historyLines     func(*process.Panel) []process.HistoryLine
+	exiting          bool
+	exitStatuses     []string
+	exitCompleted    int
 }
 
-func NewModel(panels []*process.Panel, editor string, themes ...Theme) Model {
+func NewModel(panels []*process.Panel, themes ...Theme) Model {
 	theme := DefaultTheme()
 	if len(themes) > 0 {
 		theme = themes[0]
@@ -52,7 +65,6 @@ func NewModel(panels []*process.Panel, editor string, themes ...Theme) Model {
 		grid:           layout.Compute(len(panels)),
 		activePanel:    -1,
 		maximizedPanel: -1,
-		editor:         editor,
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -62,40 +74,34 @@ func NewModel(panels []*process.Panel, editor string, themes ...Theme) Model {
 		restartPanel: func(p *process.Panel) error {
 			return p.Restart()
 		},
-		openEditor: defaultOpenEditor,
 		historyLines: func(p *process.Panel) []process.HistoryLine {
 			return p.History()
 		},
 	}
 }
 
-func defaultOpenEditor(editor, path string) tea.Cmd {
-	if err := ensureFile(path); err != nil {
-		return nil
-	}
-	c := exec.Command("sh", "-lc", fmt.Sprintf("%s %q", editor, path))
-	return tea.ExecProcess(c, func(err error) tea.Msg { return editorClosedMsg{err} })
-}
-
-func ensureFile(path string) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	return f.Close()
-}
-
-type editorClosedMsg struct{ err error }
-
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(tick(), tea.ClearScreen)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.exiting {
+		switch msg := msg.(type) {
+		case exitProgressMsg:
+			m.exitStatuses[msg.panelIdx] = msg.status
+			m.exitCompleted++
+			if m.exitCompleted == len(m.panels) {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+		// Ignore other messages while exiting
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyEsc {
-			m.afterGForTab = false
 			if m.activePanel >= 0 {
 				if m.panelScrollMode {
 					m.panelScrollMode = false
@@ -115,63 +121,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if d, ok := panelSwitchDelta(msg); ok {
-			m.afterGForTab = false
-			m.panelInsertMode = false
-			m.panelScrollMode = false
-			if n := len(m.panels); n > 0 {
-				if m.activePanel < 0 {
-					m.activePanel = 0
-				} else {
-					m.activePanel = (m.activePanel + d + n) % n
-				}
-				if m.maximizedPanel >= 0 {
-					m.maximizedPanel = m.activePanel
-					m.resizePanels()
-				}
+		if m.activePanel < 0 &&
+			msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
+			if idx, ok := panelIndexFromDigit(msg.Runes[0], len(m.panels)); ok {
+				m.applyPanelFocus(idx)
+				return m, nil
 			}
-			return m, nil
-		}
-
-		if m.activePanel < 0 && m.afterGForTab {
-			if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-				switch msg.Runes[0] {
-				case 't', 'T':
-					m.afterGForTab = false
-					m.panelInsertMode = false
-					if n := len(m.panels); n > 0 {
-						delta := 1
-						if msg.Runes[0] == 'T' {
-							delta = -1
-						}
-						if m.activePanel < 0 {
-							m.activePanel = 0
-						} else {
-							m.activePanel = (m.activePanel + delta + n) % n
-						}
-					}
-					return m, nil
-				}
-			}
-			m.afterGForTab = false
-		}
-
-		if m.activePanel < 0 && !m.afterGForTab &&
-			msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == 'g' {
-			m.afterGForTab = true
-			m.vimTabClearAt = time.Now().Add(2 * time.Second)
-			return m, nil
 		}
 
 		if m.activePanel >= 0 && m.activePanel < len(m.panels) {
 			m.ensureScrollState()
 			p := m.panels[m.activePanel]
 
-			if msg.Type == tea.KeyCtrlO {
-				if path := p.ScrollbackPath(); path != "" {
-					return m, m.openEditor(m.editor, path)
+			if !m.panelInsertMode && !m.panelScrollMode &&
+				msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
+				r := msg.Runes[0]
+				if next, ok := neighborPanelIndex(m.grid, len(m.panels), m.activePanel, r); ok {
+					m.applyPanelFocus(next)
+					return m, nil
 				}
-				return m, nil
+				if idx, ok := panelIndexFromDigit(r, len(m.panels)); ok {
+					m.applyPanelFocus(idx)
+					return m, nil
+				}
 			}
 
 			running := m.panelRunning(p)
@@ -196,10 +168,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.toggleMaximized()
 					case 'z', 'Z':
 						m.enterScrollMode()
-					case 's', 'S':
-						if path := p.ScrollbackPath(); path != "" {
-							return m, m.openEditor(m.editor, path)
-						}
 					}
 				}
 				return m, nil
@@ -232,11 +200,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_ = m.restartPanel(p)
 					m.resizePanels()
 					return m, nil
-				case 's', 'S':
-					if path := p.ScrollbackPath(); path != "" {
-						return m, m.openEditor(m.editor, path)
-					}
-					return m, nil
 				}
 			}
 			return m, nil
@@ -244,10 +207,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
-			for _, p := range m.panels {
-				p.Stop()
+			m.exiting = true
+			m.exitStatuses = make([]string, len(m.panels))
+			var cmds []tea.Cmd
+			for i, p := range m.panels {
+				m.exitStatuses[i] = fmt.Sprintf("exiting panel %s....", p.Name)
+				cmds = append(cmds, killPanelCmd(i, p))
 			}
-			return m, tea.Quit
+			return m, tea.Batch(cmds...)
 		}
 
 	case tea.MouseMsg:
@@ -265,7 +232,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok {
-				m.afterGForTab = false
 				m.activePanel = idx
 				m.panelInsertMode = false
 				m.panelScrollMode = false
@@ -281,14 +247,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizePanels()
 		return m, tea.ClearScreen
 
-	case editorClosedMsg:
-		return m, nil
-
 	case tickMsg:
-		t := time.Time(msg)
-		if m.afterGForTab && !m.vimTabClearAt.IsZero() && !t.Before(m.vimTabClearAt) {
-			m.afterGForTab = false
-		}
 		n := len(m.panels)
 		if len(m.prevPanelRunning) != n {
 			m.prevPanelRunning = make([]bool, n)
@@ -333,7 +292,7 @@ func (m Model) View() string {
 		stopped := !m.panelRunning(p)
 		body := renderPane(
 			m.theme,
-			p.Name,
+			formatPanelTitle(idx, p.Name),
 			out,
 			m.width,
 			gh,
@@ -347,7 +306,7 @@ func (m Model) View() string {
 		if m.height > 1 {
 			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 		}
-		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body)
+		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body))
 	}
 
 	cell := layout.CellSizes(m.width, gh, m.grid.Rows, m.grid.Cols)
@@ -363,7 +322,7 @@ func (m Model) View() string {
 				stopped := !m.panelRunning(p)
 				pane := renderPane(
 					m.theme,
-					p.Name,
+					formatPanelTitle(idx, p.Name),
 					out,
 					cell.Width,
 					cell.Height,
@@ -390,7 +349,21 @@ func (m Model) View() string {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 	}
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body)
+	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body))
+}
+
+func (m Model) wrapExiting(body string) string {
+	if !m.exiting {
+		return body
+	}
+	dialogBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 3).
+		Align(lipgloss.Center).
+		Render(strings.Join(m.exitStatuses, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialogBox)
 }
 
 func (m Model) statusModeLabel() string {
@@ -408,7 +381,7 @@ func (m Model) statusModeLabel() string {
 
 func (m Model) statusHint() string {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return "No active: gt/gT · focused: †‡ (Opt+t/T on Mac) or Meta+t · Ctrl-C quit"
+		return "No active: 1–9 focus · NORMAL: hjkl panes · Ctrl-C quit"
 	}
 
 	p := m.panels[m.activePanel]
@@ -425,20 +398,17 @@ func (m Model) statusHint() string {
 		} else if m.panelScrollMode {
 			parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "Esc normal")
 		} else {
-			parts = append(parts, "STOPPED-NORMAL: I insert", "Z scroll", maximizeAction, "R reload", "S scrollback", escapeAction)
+			parts = append(parts, "STOPPED-NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", escapeAction)
 		}
 	} else if m.panelInsertMode {
 		parts = append(parts, "INSERT: Esc normal")
 	} else if m.panelScrollMode {
 		parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "G live", "Esc normal")
 	} else {
-		parts = append(parts, "NORMAL: I insert", "Z scroll", maximizeAction, "R reload", "S scrollback", escapeAction)
+		parts = append(parts, "NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", escapeAction)
 	}
 
-	parts = append(parts, "†‡ next/prev", "README")
-	if p.ScrollbackPath() != "" {
-		parts = append(parts, "Ctrl+O scrollback")
-	}
+	parts = append(parts, "README")
 	return strings.Join(parts, " · ")
 }
 
@@ -503,54 +473,6 @@ func (m Model) panelIndexAt(x, y int) (int, bool) {
 	}
 
 	return idx, true
-}
-
-// panelSwitchDelta maps global panel shortcuts. Meta+bracket is usually ESC + '[' / ']',
-// reported as KeyRunes with Alt. Ctrl+] is next; Alt+Ctrl+] is previous (Ctrl+[ is the
-// same byte as Esc in terminals, so it cannot mean “prev” without breaking Esc).
-//
-// Alt+Ctrl+Left/Right are the xterm-style CSI sequences \e[1;7D / \e[1;7C. Bubble Tea has no
-// separate “Command” bit; map Ctrl+Cmd+arrows in your terminal to those sequences and they
-// work here (on macOS, Option+Ctrl+arrows often sends them already).
-//
-// macOS Option+t / Option+Shift+t insert † / ‡ (U+2020 / U+2021) with no Meta bit; those
-// runes are treated like vim gt / gT so panel cycling works without leaking into the PTY.
-func panelSwitchDelta(msg tea.KeyMsg) (delta int, ok bool) {
-	if msg.Type == tea.KeyCtrlCloseBracket {
-		if msg.Alt {
-			return -1, true
-		}
-		return 1, true
-	}
-	if msg.Type == tea.KeyCtrlLeft && msg.Alt {
-		return -1, true
-	}
-	if msg.Type == tea.KeyCtrlRight && msg.Alt {
-		return 1, true
-	}
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		r := msg.Runes[0]
-		// macOS US keyboard: Option+t → †, Option+Shift+t → ‡ (not Esc+t), so no Meta bit.
-		switch r {
-		case '\u2020': // † — same keys as vim "gt" next-tab mnemonic on Mac
-			return 1, true
-		case '\u2021': // ‡ — same as vim "gT" prev tab
-			return -1, true
-		}
-		if msg.Alt {
-			switch r {
-			case '[':
-				return -1, true
-			case ']':
-				return 1, true
-			case 't':
-				return 1, true // vim :tabnext / gt (terminals that send Meta+t)
-			case 'T':
-				return -1, true // vim :tabprev / gT
-			}
-		}
-	}
-	return 0, false
 }
 
 func (m *Model) toggleMaximized() {
@@ -860,7 +782,8 @@ func (m Model) maximizedPanelInnerSize() (int, int) {
 func (m Model) renderStatusLine() string {
 	panelName := "none"
 	if m.activePanel >= 0 && m.activePanel < len(m.panels) {
-		panelName = m.panels[m.activePanel].Name
+		p := m.panels[m.activePanel]
+		panelName = fmt.Sprintf("[%d] %s", m.activePanel+1, p.Name)
 	}
 	hint := m.statusHint()
 	mode := m.statusModeLabel()
@@ -879,7 +802,7 @@ func (m Model) renderStatusLine() string {
 	}
 	segments := []statusSegment{
 		{Text: time.Now().Format("15:04:05"), FG: m.theme.color(m.theme.StatusTimeFG), BG: m.theme.color(m.theme.StatusTimeBG)},
-		{Text: fmt.Sprintf("active panel: %q", panelName), FG: m.theme.color(m.theme.StatusActivePanelFG), BG: m.theme.color(m.theme.StatusActivePanelBG)},
+		{Text: fmt.Sprintf("active panel: %s", panelName), FG: m.theme.color(m.theme.StatusActivePanelFG), BG: m.theme.color(m.theme.StatusActivePanelBG)},
 		{Text: "MODE: " + mode, FG: modeFG, BG: modeBG},
 		{Text: hint, FG: m.theme.color(m.theme.StatusHintFG), BG: m.theme.color(m.theme.StatusHintBG)},
 	}

@@ -5,6 +5,7 @@ cmd = "air"
 [panel.worker1]
 workingdir = "~/code/demo-stack"
 cmd = "make worker.acknowledge_queue"
+cmd_kill = "make stop_worker"
 
 # Optional: scrollback settings (all fields have sensible defaults)
 # [scrollback]

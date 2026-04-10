@@ -49,7 +49,7 @@ func main() {
 	sb := cfg.Scrollback
 	panels := make([]*process.Panel, len(cfg.Panels))
 	for i, spec := range cfg.Panels {
-		panels[i] = process.NewWithScrollback(spec.Name, spec.Cmd, spec.WorkingDir, sb.Dir, sb.MaxBytes)
+		panels[i] = process.NewWithScrollback(spec.Name, spec.Cmd, spec.CmdKill, spec.WorkingDir, sb.Dir, sb.MaxBytes)
 		panels[i].ResetScrollback()
 	}
 
@@ -63,7 +63,7 @@ func main() {
 		}
 	}
 
-	model := ui.NewModel(panels, sb.Editor, ui.ResolveTheme(appConfig.Theme))
+	model := ui.NewModel(panels, ui.ResolveTheme(appConfig.Theme))
 	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {

@@ -136,9 +136,9 @@ func TestRenderStatusLineUsesThemeColors(t *testing.T) {
 
 func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
 	model := NewModel([]*process.Panel{
-		process.New("alpha", "echo alpha", "."),
-		process.New("beta", "echo beta", "."),
-	}, "vi")
+		process.New("alpha", "echo alpha", "", "."),
+		process.New("beta", "echo beta", "", "."),
+	})
 	model.width = 80
 	model.height = 20
 	model.activePanel = 0

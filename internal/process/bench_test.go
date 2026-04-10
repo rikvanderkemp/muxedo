@@ -23,7 +23,7 @@ func BenchmarkNormalizeScreen_40Lines(b *testing.B) {
 }
 
 func BenchmarkPanelOutput(b *testing.B) {
-	p := New("bench", "true", ".")
+	p := New("bench", "true", "", ".")
 	p.termMu.Lock()
 	_, _ = p.term.Write([]byte(strings.Repeat("x", 80) + "\r\n"))
 	p.termMu.Unlock()
@@ -35,7 +35,7 @@ func BenchmarkPanelOutput(b *testing.B) {
 }
 
 func BenchmarkPanelDisplayForView_cached(b *testing.B) {
-	p := New("bench", "true", ".")
+	p := New("bench", "true", "", ".")
 	p.termMu.Lock()
 	_, _ = p.term.Write([]byte("hello\r\n"))
 	p.termMu.Unlock()

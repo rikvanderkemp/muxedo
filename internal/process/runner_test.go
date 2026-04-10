@@ -8,14 +8,14 @@ import (
 )
 
 func TestNewPanelIsNotRunning(t *testing.T) {
-	p := New("test", "echo hi", ".")
+	p := New("test", "echo hi", "", ".")
 	if p.Running() {
 		t.Fatal("new panel should not be running")
 	}
 }
 
 func TestPanelRunningAfterStart(t *testing.T) {
-	p := New("test", "sleep 60", ".")
+	p := New("test", "sleep 60", "", ".")
 	if err := p.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestPanelRunningAfterStart(t *testing.T) {
 }
 
 func TestPanelStoppedAfterProcessExits(t *testing.T) {
-	p := New("test", "true", ".")
+	p := New("test", "true", "", ".")
 	if err := p.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestPanelStoppedAfterProcessExits(t *testing.T) {
 }
 
 func TestPanelRestart(t *testing.T) {
-	p := New("test", "true", ".")
+	p := New("test", "true", "", ".")
 	if err := p.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestPanelRestart(t *testing.T) {
 }
 
 func TestRestartWhileRunningIsIdempotent(t *testing.T) {
-	p := New("test", "sleep 60", ".")
+	p := New("test", "sleep 60", "", ".")
 	if err := p.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRestartWhileRunningIsIdempotent(t *testing.T) {
 }
 
 func TestPanelElapsedAdvancesWhileRunningAndFreezesAfterStop(t *testing.T) {
-	p := New("test", "sleep 60", ".")
+	p := New("test", "sleep 60", "", ".")
 	if err := p.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestPanelElapsedAdvancesWhileRunningAndFreezesAfterStop(t *testing.T) {
 }
 
 func TestPanelRestartResetsElapsed(t *testing.T) {
-	p := New("test", "sleep 60", ".")
+	p := New("test", "sleep 60", "", ".")
 	if err := p.Start(); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestPanelRestartResetsElapsed(t *testing.T) {
 
 func TestResetScrollbackClearsPersistedHistory(t *testing.T) {
 	dir := t.TempDir()
-	p := NewWithScrollback("test", "echo hi", ".", dir, 0)
+	p := NewWithScrollback("test", "echo hi", "", ".", dir, 0)
 
 	if err := os.WriteFile(p.ScrollbackPath(), []byte("stale\nhistory\n"), 0o644); err != nil {
 		t.Fatalf("write stale scrollback: %v", err)
@@ -159,7 +159,7 @@ func TestResetScrollbackClearsPersistedHistory(t *testing.T) {
 
 func TestHistoryLinesExcludesStaleScrollbackAfterReset(t *testing.T) {
 	dir := t.TempDir()
-	p := NewWithScrollback("test", "echo hi", ".", dir, 0)
+	p := NewWithScrollback("test", "echo hi", "", ".", dir, 0)
 
 	if err := os.WriteFile(p.ScrollbackPath(), []byte("stale\nhistory\n"), 0o644); err != nil {
 		t.Fatalf("write stale scrollback: %v", err)
