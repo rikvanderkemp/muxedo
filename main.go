@@ -15,7 +15,19 @@ import (
 
 func main() {
 	profilePath := flag.String("profile", "", "path to TOML profile file")
+	dumpConfig := flag.Bool("dump-config", false, "write the default app config and exit")
+	force := flag.Bool("force", false, "overwrite existing files when used with dump commands")
 	flag.Parse()
+
+	if *dumpConfig {
+		path, err := config.WriteDefault(*force)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stdout, "wrote default config to %s\n", path)
+		return
+	}
 
 	appConfig, err := config.Load()
 	if err != nil {
