@@ -50,6 +50,7 @@ func main() {
 	panels := make([]*process.Panel, len(cfg.Panels))
 	for i, spec := range cfg.Panels {
 		panels[i] = process.NewWithScrollback(spec.Name, spec.Cmd, spec.WorkingDir, sb.Dir, sb.MaxBytes)
+		panels[i].ResetScrollback()
 	}
 
 	for _, p := range panels {

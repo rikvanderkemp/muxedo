@@ -53,8 +53,15 @@ Panels are arranged in an auto-grid (near-square) layout that fills the terminal
 - **Other panel chords** (wrap; from unfocused, first activation selects the first panel): **`Alt+[`** / **`Alt+Ctrl+]`** (prev), **`Ctrl+]`** / **`Alt+]`** (next), **`Alt+Ctrl+←/→`** (prev/next xterm `CSI 1;7`). **Cmd+bracket** only works if the terminal is set to send **`Esc`+`[`** / **`Esc`+`]`** (e.g. iTerm “Send Escape Sequence”, Ghostty `super+bracket_*`).
 - **Vim-style panel modes** (after you focus a panel, you start in **normal** mode):
   - **`i`** or **`I`** — **insert** mode: keys (including `q`, `Ctrl+C`, etc.) are sent to the panel process, like a typical focused terminal.
+  - **`z`** or **`Z`** — **scroll** mode: the panel becomes a read-only scrollback viewer with a line cursor and optional mark.
   - **`Esc`** — **trickle**: from insert, first **`Esc`** returns to **normal**; from **normal**, **`Esc`** unfocuses the panel. (**`Ctrl+[`** is the same byte as **`Esc`** in a TTY, so it follows the same rule — it cannot mean “previous panel”.)
   - In **normal** mode: **`m`** / **`M`** toggles maximize for the focused panel; **`r`** / **`R`** reloads (restarts) the panel command; **`s`** / **`S`** or **`Ctrl+O`** opens the scrollback log in your editor when scrollback is enabled (see below). Other keys are not sent to the panel.
+- In **scroll** mode:
+  - **`PgUp`** / **`PgDn`** or mouse wheel — move the viewport.
+  - **`j`** / **`k`** or **Up** / **Down** — move the selected line.
+  - **`g`** / **`G`** — jump to oldest history / live bottom.
+  - **`m`** — toggle a persistent mark on the selected line.
+  - **`Esc`** — leave scroll mode and return to normal mode.
 - While a panel is maximized, next/prev panel shortcuts keep the single-panel view and switch which panel is shown.
 - Pressing **`Esc`** from maximized **normal** mode restores the grid and clears focus.
 - When a panel process exits, the panel shows a "Press R to reload" overlay. In **normal** mode, press **`R`** (or **`r`**) to restart the command.
@@ -63,6 +70,10 @@ Panels are arranged in an auto-grid (near-square) layout that fills the terminal
 ## Scrollback
 
 Each panel's output history is captured to a log file on disk. When the terminal scrolls, lines that leave the top of the screen are appended to the panel's scrollback file. With a focused panel, open that file from **normal** mode with **`s`** / **`S`** or **`Ctrl+O`** (in **insert** mode, **`Ctrl+O`** still opens the log instead of sending it to the process).
+
+Scrollback starts empty on each muxedo launch, so in-panel scrolling and editor-opened logs only show the current app run.
+
+Focused panels can also enter **scroll** mode with **`z`** to inspect that history in place. Scroll mode merges the current visible screen with the existing file-backed scrollback, so it works best for shells and log output and remains best-effort for full-screen TUIs.
 
 The editor is chosen from (in order): the `editor` field in config, the `EDITOR` environment variable, or `vi` as a fallback.
 
@@ -75,7 +86,7 @@ max_bytes = 1048576                   # max size per panel file in bytes; 0 = un
 editor = "vim"                        # override $EDITOR for scrollback viewing
 ```
 
-Restarting a panel (`R`) clears its scrollback file. Resizing the terminal resets the internal snapshot used for scroll detection but keeps the existing file.
+Restarting a panel (`R`) clears its scrollback file. Resizing the terminal resets the internal snapshot used for scroll detection but keeps the existing file for the current run.
 
 Note: scrollback capture works best with log-style and shell output. Full-screen TUI programs that redraw the entire screen may not produce meaningful scrollback history.
 

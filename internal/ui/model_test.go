@@ -9,6 +9,14 @@ import (
 	"muxedo/internal/process"
 )
 
+func historyLinesOf(lines ...string) []process.HistoryLine {
+	out := make([]process.HistoryLine, len(lines))
+	for i, line := range lines {
+		out[i] = process.HistoryLine{ID: uint64(i + 1), Text: line}
+	}
+	return out
+}
+
 func TestUpdateClickActivatesPanel(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "."),
@@ -976,5 +984,238 @@ func TestViewStatusLineIncludesMode(t *testing.T) {
 	view = model.View()
 	if !strings.Contains(view, "MODE: INSERT") {
 		t.Fatalf("expected INSERT mode indicator in status line, got view %q", view)
+	}
+}
+
+func TestZEntersScrollMode(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("a", "b", "c")
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	model = next.(Model)
+
+	if !model.panelScrollMode {
+		t.Fatal("expected scroll mode after z")
+	}
+	if model.scrollSelections[0] != 2 {
+		t.Fatalf("expected selection at live bottom, got %d", model.scrollSelections[0])
+	}
+}
+
+func TestScrollModeConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelScrollMode = true
+	model.width = 80
+	model.height = 12
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+	}
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.ensureScrollState()
+	model.scrollSelections[0] = 9
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	model = next.(Model)
+	if model.scrollOffsets[0] == 0 {
+		t.Fatal("expected pgup to move viewport away from bottom")
+	}
+
+	offsetAfterPgUp := model.scrollOffsets[0]
+	next, _ = model.Update(tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	model = next.(Model)
+	if model.scrollOffsets[0] >= offsetAfterPgUp {
+		t.Fatalf("expected wheel down to move viewport toward live bottom, got %d -> %d", offsetAfterPgUp, model.scrollOffsets[0])
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = next.(Model)
+	if model.scrollOffsets[0] != 0 {
+		t.Fatalf("expected pgdown to return to live bottom, got offset %d", model.scrollOffsets[0])
+	}
+}
+
+func TestScrollModeSelectionAndMarkPersistAcrossAppend(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelScrollMode = true
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	history := []string{"0", "1", "2", "3", "4", "5", "6", "7"}
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf(history...)
+	}
+	model.ensureScrollState()
+	model.scrollSelections[0] = 6
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.scrollMarks[0] != 7 {
+		t.Fatalf("expected mark at selected line, got %d", model.scrollMarks[0])
+	}
+
+	history = append(history, "8", "9")
+	vp := model.viewportForPanel(0, 11)
+	if vp.MarkedRow != 3 {
+		t.Fatalf("expected marked line to scroll upward with new content, got row %d", vp.MarkedRow)
+	}
+	if vp.Lines[vp.MarkedRow] != "6" {
+		t.Fatalf("expected original marked content to remain highlighted, got %q", vp.Lines[vp.MarkedRow])
+	}
+}
+
+func TestScrollModeMarkedLineScrollsOffButCanBeFoundAgain(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelScrollMode = true
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	history := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf(history...)
+	}
+	model.ensureScrollState()
+	model.scrollSelections[0] = 8
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.scrollMarks[0] != 9 {
+		t.Fatalf("expected mark stored at line 8, got %d", model.scrollMarks[0])
+	}
+
+	history = append(history, "10", "11", "12", "13", "14", "15")
+	vp := model.viewportForPanel(0, 11)
+	if vp.MarkedRow != -1 {
+		t.Fatalf("expected marked line to scroll offscreen at live bottom, got row %d", vp.MarkedRow)
+	}
+	if model.scrollMarks[0] != 9 {
+		t.Fatalf("expected mark to remain attached to the same history entry, got %d", model.scrollMarks[0])
+	}
+
+	model.scrollViewportBy(-6)
+	vp = model.viewportForPanel(0, 11)
+	if vp.MarkedRow == -1 {
+		t.Fatal("expected marked line to be visible again after scrolling up")
+	}
+	if vp.Lines[vp.MarkedRow] != "8" {
+		t.Fatalf("expected marked content to remain line 8 after scrolling up, got %q", vp.Lines[vp.MarkedRow])
+	}
+}
+
+func TestScrollModeRetainsMarkWhenLineTemporarilyMissing(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelScrollMode = true
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	history := []process.HistoryLine{
+		{ID: 1, Text: "0"},
+		{ID: 2, Text: "1"},
+		{ID: 3, Text: "2"},
+		{ID: 4, Text: "3"},
+	}
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return append([]process.HistoryLine(nil), history...)
+	}
+	model.ensureScrollState()
+	model.scrollSelections[0] = 1
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.scrollMarks[0] != 2 {
+		t.Fatalf("expected initial mark, got %d", model.scrollMarks[0])
+	}
+
+	history = []process.HistoryLine{
+		{ID: 3, Text: "2"},
+		{ID: 4, Text: "3"},
+		{ID: 5, Text: "4"},
+		{ID: 6, Text: "5"},
+	}
+	model.scrollViewportBy(0)
+	if model.scrollMarks[0] != 2 {
+		t.Fatalf("expected mark retained while line is temporarily missing, got %d", model.scrollMarks[0])
+	}
+
+	history = []process.HistoryLine{
+		{ID: 2, Text: "1"},
+		{ID: 3, Text: "2"},
+		{ID: 4, Text: "3"},
+		{ID: 5, Text: "4"},
+	}
+	vp := model.viewportForPanel(0, 11)
+	if vp.MarkedRow == -1 {
+		t.Fatal("expected marked line to reappear when its history entry returns")
+	}
+	if vp.Lines[vp.MarkedRow] != "1" {
+		t.Fatalf("expected restored mark on original line, got %q", vp.Lines[vp.MarkedRow])
+	}
+}
+
+func TestScrollModeMarkStaysOnOriginalDuplicateLine(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelScrollMode = true
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	history := []string{"1", "2", "--- pause ---", "3", "4"}
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf(history...)
+	}
+	model.ensureScrollState()
+	model.scrollSelections[0] = 2
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = next.(Model)
+	if model.scrollMarks[0] != 3 {
+		t.Fatalf("expected mark stored for the first duplicate line, got %d", model.scrollMarks[0])
+	}
+
+	history = append(history, "--- pause ---", "5", "6")
+	vp := model.viewportForPanel(0, 11)
+	if vp.MarkedRow == -1 {
+		t.Fatal("expected marked duplicate line to remain visible")
+	}
+	if vp.Lines[vp.MarkedRow] != "--- pause ---" {
+		t.Fatalf("expected marked line text to stay on pause line, got %q", vp.Lines[vp.MarkedRow])
+	}
+	if vp.MarkedRow != 1 {
+		t.Fatalf("expected original duplicate line to stay marked, got row %d", vp.MarkedRow)
+	}
+}
+
+func TestStatusModeLabelIncludesScroll(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "."),
+	}, "vi")
+	model.activePanel = 0
+	model.panelScrollMode = true
+
+	if got := model.statusModeLabel(); got != "SCROLL" {
+		t.Fatalf("expected SCROLL when focused in scroll mode, got %q", got)
 	}
 }
