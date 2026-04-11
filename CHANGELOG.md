@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/rikvanderkemp/muxedo/compare/v0.1.2...v0.1.3) (2026-04-11)
+
+
+### Features
+
+* **cli:** default profile to .muxedo ([fa6fde9](https://github.com/rikvanderkemp/muxedo/commit/fa6fde97a0165a32ba9b447d3c6599671143ac89))
+* **cli:** default profile to .muxedo ([685df94](https://github.com/rikvanderkemp/muxedo/commit/685df94713e32b8de8aed51148eaa9a4d8fed93c))
+
 ## [0.1.2](https://github.com/rikvanderkemp/muxedo/compare/v0.1.1...v0.1.2) (2026-04-11)
 
 
