@@ -52,8 +52,9 @@ A profile defines the global environment, startup commands, and the layout of pa
 # Global working directory fallback (optional; ~ is expanded)
 workingdir = "~/code/project"
 
-# Commands to run sequentially in the background when the TUI starts (optional)
-# Their output is streamed to the Message Buffer (Ctrl-B)
+# Commands to run when the TUI starts (optional)
+# Startup items are async by default. Their status and output are streamed
+# to the Message Buffer (Ctrl-B) before and after panels are initialized.
 [[startup]]
 program = "docker"
 args = ["compose", "up", "-d"]
@@ -61,6 +62,7 @@ args = ["compose", "up", "-d"]
 
 [[startup]]
 shell = "make migrate && make seed"
+mode = "sync"
 
 [panel.api]
 # Uses global workingdir fallback
@@ -78,11 +80,12 @@ shell_kill = "docker compose stop api"
 ```
 
 - `workingdir` (top-level) — optional global default for all panels and startup commands.
-- `[[startup]]` — optional array of commands to execute in the background when the application starts. The TUI remains active and displays their progress in the Message Buffer.
+- `[[startup]]` — optional array of commands to execute when the application starts. Async items are launched in the background by default; sync items block until they finish. The Message Buffer shows per-item startup status plus streamed logs before and after panel initialization.
   - `program` — executable to run directly.
   - `args` — optional argument list used with `program`.
   - `shell` — optional shell command to run via `sh -c`; use only when you need shell features like pipes, redirects, or `&&`.
   - `workingdir` — optional working directory for this specific startup command.
+  - `mode` — optional startup mode: `async` (default) or `sync`.
 - `[panel.<name>]` — each section defines a pane:
   - `workingdir` — working directory for the command.
   - `program` — executable to run directly.

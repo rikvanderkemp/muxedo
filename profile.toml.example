@@ -1,8 +1,9 @@
 # Global working directory fallback for all panels and startup commands (optional)
 workingdir = "."
 
-# Commands to run sequentially in the background when the TUI starts.
-# Their output is streamed to the Message Buffer (view with Ctrl-B).
+# Commands to run when the TUI starts.
+# Startup items are async by default; set mode = "sync" to block on one.
+# Their status and output are streamed to the Message Buffer (view with Ctrl-B).
 [[startup]]
 program = "sleep"
 args = ["2"]
@@ -10,6 +11,7 @@ workingdir = "." # optional: defaults to the global 'workingdir', then to muxedo
 
 [[startup]]
 shell = "printf 'warming up demo services\\n'; sleep 3"
+mode = "sync"
 
 [panel.pong]
 shell = "i=0 d=1; while true; do printf '\\r[%*s><%*s]' \"$i\" '' \"$((20-i))\" ''; sleep 0.08; [ \"$i\" -eq 20 ] && d=-1; [ \"$i\" -eq 0 ] && d=1; i=$((i+d)); done"

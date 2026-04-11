@@ -2,8 +2,10 @@ package ui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -21,6 +23,38 @@ type LogMsg string
 
 type StartupCompleteMsg struct {
 	panels []*process.Panel
+}
+
+type startupStatus string
+
+const (
+	startupStatusPending startupStatus = "pending"
+	startupStatusRunning startupStatus = "running"
+	startupStatusOK      startupStatus = "ok"
+	startupStatusError   startupStatus = "error"
+)
+
+type startupItem struct {
+	Label       string
+	Mode        profile.StartupMode
+	Status      startupStatus
+	Spinner     int
+	ExitCode    int
+	HasExitCode bool
+	ErrorText   string
+}
+
+type startupStatusMsg struct {
+	idx         int
+	status      startupStatus
+	exitCode    int
+	hasExitCode bool
+	errText     string
+}
+
+type startupLogMsg struct {
+	idx  int
+	line string
 }
 
 type exitProgressMsg struct {
@@ -69,6 +103,7 @@ type Model struct {
 	showBuffer       bool
 	startupCompleted bool
 	startupSpecs     []profile.StartupSpec
+	startupItems     []startupItem
 	panelSpecs       []profile.PanelSpec
 	scrollbackConfig profile.ScrollbackConfig
 	msgChan          chan tea.Msg
@@ -107,6 +142,7 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
 	return Model{
 		startupSpecs:     startup,
+		startupItems:     newStartupItems(startup),
 		panelSpecs:       panels,
 		scrollbackConfig: sb,
 		theme:            theme,
@@ -131,9 +167,9 @@ func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec
 
 func (m Model) Init() tea.Cmd {
 	if m.startupCompleted {
-		return tea.Batch(tick(), tea.ClearScreen)
+		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen)
 	}
-	return tea.Batch(tick(), m.startupSequence, tea.ClearScreen)
+	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen)
 }
 
 func (m Model) startupSequence() tea.Msg {
@@ -142,44 +178,8 @@ func (m Model) startupSequence() tea.Msg {
 			m.msgChan <- LogMsg("No startup commands specified.")
 		}
 
-		for _, spec := range m.startupSpecs {
-			label := describeCommand(spec.Command)
-			m.msgChan <- LogMsg(fmt.Sprintf("--- Running: %s", label))
-			cmd, err := spec.Command.Build(spec.WorkingDir, false)
-			if err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: could not build %q: %v", label, err))
-				continue
-			}
-
-			stdout, err := cmd.StdoutPipe()
-			if err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: could not capture stdout for %q: %v", label, err))
-				continue
-			}
-			stderr, err := cmd.StderrPipe()
-			if err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: could not capture stderr for %q: %v", label, err))
-				continue
-			}
-			multi := io.MultiReader(stdout, stderr)
-
-			if err := cmd.Start(); err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: could not start %q: %v", label, err))
-				continue
-			}
-
-			scanner := bufio.NewScanner(multi)
-			for scanner.Scan() {
-				m.msgChan <- LogMsg(scanner.Text())
-			}
-
-			if err := scanner.Err(); err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: scanning output for %q: %v", label, err))
-			}
-
-			if err := cmd.Wait(); err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: command %q exited: %v", label, err))
-			}
+		for i, spec := range m.startupSpecs {
+			m.runStartupItem(i, spec)
 		}
 
 		m.msgChan <- LogMsg("--- Startup commands completed. Initializing panels...")
@@ -196,11 +196,117 @@ func (m Model) startupSequence() tea.Msg {
 
 		m.msgChan <- StartupCompleteMsg{panels: panels}
 	}()
-	return m.waitForMsg()
+	return nil
 }
 
 func (m Model) waitForMsg() tea.Msg {
 	return <-m.msgChan
+}
+
+func newStartupItems(specs []profile.StartupSpec) []startupItem {
+	items := make([]startupItem, 0, len(specs))
+	for _, spec := range specs {
+		items = append(items, startupItem{
+			Label:  describeCommand(spec.Command),
+			Mode:   spec.Mode,
+			Status: startupStatusPending,
+		})
+	}
+	return items
+}
+
+func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
+	label := describeCommand(spec.Command)
+	m.msgChan <- startupStatusMsg{idx: idx, status: startupStatusRunning}
+	m.msgChan <- LogMsg(fmt.Sprintf("--- Starting %s (%s)", label, spec.Mode))
+
+	cmd, stdout, stderr, err := buildStartupCommand(spec)
+	if err != nil {
+		m.msgChan <- startupStatusMsg{
+			idx:     idx,
+			status:  startupStatusError,
+			errText: err.Error(),
+		}
+		m.msgChan <- LogMsg(fmt.Sprintf("error: could not prepare %q: %v", label, err))
+		return
+	}
+
+	done := make(chan struct{}, 2)
+	go m.streamStartupOutput(idx, stdout, done)
+	go m.streamStartupOutput(idx, stderr, done)
+
+	if err := cmd.Start(); err != nil {
+		m.msgChan <- startupStatusMsg{
+			idx:     idx,
+			status:  startupStatusError,
+			errText: fmt.Sprintf("start failed: %v", err),
+		}
+		m.msgChan <- LogMsg(fmt.Sprintf("error: could not start %q: %v", label, err))
+		return
+	}
+
+	waitAndReport := func() {
+		err := cmd.Wait()
+		<-done
+		<-done
+		statusMsg := startupStatusMsg{
+			idx:         idx,
+			status:      startupStatusOK,
+			exitCode:    0,
+			hasExitCode: true,
+		}
+		if err != nil {
+			statusMsg.status = startupStatusError
+			statusMsg.exitCode, statusMsg.hasExitCode, statusMsg.errText = commandExitDetails(err)
+			m.msgChan <- LogMsg(fmt.Sprintf("error: command %q exited: %v", label, err))
+		}
+		m.msgChan <- statusMsg
+	}
+
+	if spec.Mode == profile.StartupModeSync {
+		waitAndReport()
+		return
+	}
+
+	go waitAndReport()
+}
+
+func buildStartupCommand(spec profile.StartupSpec) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
+	cmd, err := spec.Command.Build(spec.WorkingDir, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("capture stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("capture stderr: %w", err)
+	}
+	return cmd, stdout, stderr, nil
+}
+
+func (m Model) streamStartupOutput(idx int, r io.Reader, done chan<- struct{}) {
+	defer func() {
+		done <- struct{}{}
+	}()
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		m.msgChan <- startupLogMsg{idx: idx, line: scanner.Text()}
+	}
+	if err := scanner.Err(); err != nil {
+		m.msgChan <- startupLogMsg{idx: idx, line: fmt.Sprintf("error: scanning output: %v", err)}
+	}
+}
+
+func commandExitDetails(err error) (exitCode int, hasExitCode bool, errText string) {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), true, ""
+	}
+	return 0, false, err.Error()
 }
 
 func describeCommand(cmd process.CommandSpec) string {
@@ -218,12 +324,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LogMsg:
 		m.messageBuffer = append(m.messageBuffer, string(msg))
 		return m, m.waitForMsg
+	case startupLogMsg:
+		m.messageBuffer = append(m.messageBuffer, m.formatStartupLog(msg.idx, msg.line))
+		return m, m.waitForMsg
+	case startupStatusMsg:
+		if msg.idx >= 0 && msg.idx < len(m.startupItems) {
+			item := m.startupItems[msg.idx]
+			item.Status = msg.status
+			item.HasExitCode = msg.hasExitCode
+			item.ExitCode = msg.exitCode
+			item.ErrorText = msg.errText
+			if msg.status != startupStatusRunning {
+				item.Spinner = 0
+			}
+			m.startupItems[msg.idx] = item
+		}
+		return m, m.waitForMsg
 	case StartupCompleteMsg:
 		m.panels = msg.panels
 		m.startupCompleted = true
 		m.showBuffer = false
 		m.resizePanels()
-		return m, nil
+		return m, m.waitForMsg
 	}
 
 	if m.killingPanel {
@@ -432,6 +554,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case tickMsg:
+		for i := range m.startupItems {
+			if m.startupItems[i].Status == startupStatusRunning {
+				m.startupItems[i].Spinner = (m.startupItems[i].Spinner + 1) % len(startupSpinnerFrames)
+			}
+		}
 		n := len(m.panels)
 		if len(m.prevPanelRunning) != n {
 			m.prevPanelRunning = make([]bool, n)
@@ -470,11 +597,7 @@ func (m Model) renderMessageBuffer() string {
 		innerH = 0
 	}
 
-	lines := m.messageBuffer
-	if len(lines) > innerH {
-		lines = lines[len(lines)-innerH:]
-	}
-
+	lines := m.renderMessageBufferLines(innerH)
 	content := strings.Join(lines, "\n")
 	title := " MESSAGE BUFFER (ctrl+b to toggle) "
 	if !m.startupCompleted {
@@ -614,10 +737,10 @@ func (m Model) statusModeLabel() string {
 
 func (m Model) statusHint() string {
 	if !m.startupCompleted {
-		return "STARTING... · Please wait for startup commands to finish"
+		return "STARTING... · Startup status and logs"
 	}
 	if m.showBuffer {
-		return "BUFFER: Ctrl-B toggle back · Logs of startup and events"
+		return "BUFFER: Ctrl-B toggle back · Startup status and logs"
 	}
 
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
@@ -757,6 +880,81 @@ func resizeIntSlice(prev []int, n int, fill int) []int {
 		out[i] = fill
 	}
 	return out
+}
+
+var startupSpinnerFrames = []string{"-", "\\", "|", "/"}
+
+func (m Model) formatStartupLog(idx int, line string) string {
+	if idx < 0 || idx >= len(m.startupItems) {
+		return line
+	}
+	return fmt.Sprintf("[%s] %s", m.startupItems[idx].Label, line)
+}
+
+func (m Model) renderMessageBufferLines(innerH int) []string {
+	if innerH <= 0 {
+		return nil
+	}
+
+	lines := make([]string, 0, innerH)
+	statusLines := m.renderStartupStatusLines()
+	if len(statusLines) > 0 {
+		if len(statusLines) > innerH {
+			return statusLines[len(statusLines)-innerH:]
+		}
+		lines = append(lines, statusLines...)
+	}
+
+	remaining := innerH - len(lines)
+	if remaining <= 0 {
+		return lines
+	}
+	if len(lines) > 0 {
+		lines = append(lines, "")
+		remaining--
+	}
+	if remaining <= 0 {
+		return lines
+	}
+
+	logs := m.messageBuffer
+	if len(logs) > remaining {
+		logs = logs[len(logs)-remaining:]
+	}
+	lines = append(lines, logs...)
+	return lines
+}
+
+func (m Model) renderStartupStatusLines() []string {
+	if len(m.startupItems) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(m.startupItems)+1)
+	lines = append(lines, "Startup status:")
+	for _, item := range m.startupItems {
+		lines = append(lines, formatStartupStatusLine(item))
+	}
+	return lines
+}
+
+func formatStartupStatusLine(item startupItem) string {
+	prefix := fmt.Sprintf("Starting %s [%s]", item.Label, item.Mode)
+	switch item.Status {
+	case startupStatusOK:
+		return fmt.Sprintf("%s -> OK (%d)", prefix, item.ExitCode)
+	case startupStatusError:
+		if item.HasExitCode {
+			return fmt.Sprintf("%s -> ERROR (%d)", prefix, item.ExitCode)
+		}
+		if item.ErrorText != "" {
+			return fmt.Sprintf("%s -> ERROR (%s)", prefix, item.ErrorText)
+		}
+		return prefix + " -> ERROR"
+	case startupStatusRunning:
+		return fmt.Sprintf("%s -> %s", prefix, startupSpinnerFrames[item.Spinner%len(startupSpinnerFrames)])
+	default:
+		return prefix + " -> queued"
+	}
 }
 
 func resizeUint64Slice(prev []uint64, n int) []uint64 {
