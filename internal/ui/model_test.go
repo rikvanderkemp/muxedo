@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"muxedo/internal/process"
+	"muxedo/internal/profile"
 )
 
 func historyLinesOf(lines ...string) []process.HistoryLine {
@@ -518,6 +519,102 @@ func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
 	restoreCols1, restoreRows1 := panels[1].TerminalSize()
 	if restoreCols0 != 58 || restoreRows0 != 36 || restoreCols1 != 58 || restoreRows1 != 36 {
 		t.Fatalf("expected both panels restored to grid size, got p0=%dx%d p1=%dx%d", restoreCols0, restoreRows0, restoreCols1, restoreRows1)
+	}
+}
+
+func TestNewModelWithSpecsDefaultsStartupItemsToAsync(t *testing.T) {
+	model := NewModelWithSpecs([]profile.StartupSpec{
+		{
+			Command: process.CommandSpec{Program: "echo", Args: []string{"hi"}},
+			Mode:    profile.StartupModeAsync,
+		},
+	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+
+	if len(model.startupItems) != 1 {
+		t.Fatalf("len(startupItems) = %d, want 1", len(model.startupItems))
+	}
+	if model.startupItems[0].Mode != profile.StartupModeAsync {
+		t.Fatalf("startupItems[0].Mode = %q, want %q", model.startupItems[0].Mode, profile.StartupModeAsync)
+	}
+}
+
+func TestStartupBufferShowsStatusRowsAndLogs(t *testing.T) {
+	model := NewModelWithSpecs([]profile.StartupSpec{
+		{
+			Command: process.CommandSpec{Program: "echo", Args: []string{"one"}},
+			Mode:    profile.StartupModeAsync,
+		},
+	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model.width = 100
+	model.height = 12
+
+	next, _ := model.Update(startupStatusMsg{idx: 0, status: startupStatusRunning})
+	model = next.(Model)
+	next, _ = model.Update(startupLogMsg{idx: 0, line: "warming up"})
+	model = next.(Model)
+
+	view := model.renderMessageBuffer()
+	if !strings.Contains(view, "Startup status:") {
+		t.Fatalf("renderMessageBuffer() missing startup header: %q", view)
+	}
+	if !strings.Contains(view, "Starting echo one [async] ->") {
+		t.Fatalf("renderMessageBuffer() missing startup status row: %q", view)
+	}
+	if !strings.Contains(view, "[echo one] warming up") {
+		t.Fatalf("renderMessageBuffer() missing startup log line: %q", view)
+	}
+}
+
+func TestStartupTickAdvancesSpinner(t *testing.T) {
+	model := NewModelWithSpecs([]profile.StartupSpec{
+		{
+			Command: process.CommandSpec{Program: "echo", Args: []string{"one"}},
+			Mode:    profile.StartupModeAsync,
+		},
+	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+
+	next, _ := model.Update(startupStatusMsg{idx: 0, status: startupStatusRunning})
+	model = next.(Model)
+	frame := model.startupItems[0].Spinner
+
+	next, _ = model.Update(tickMsg{})
+	model = next.(Model)
+	if model.startupItems[0].Spinner == frame {
+		t.Fatal("expected startup spinner to advance on tick")
+	}
+}
+
+func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
+	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+
+	next, cmd := model.Update(StartupCompleteMsg{})
+	model = next.(Model)
+	if !model.startupCompleted {
+		t.Fatal("expected startupCompleted true")
+	}
+	if cmd == nil {
+		t.Fatal("expected waitForMsg command after startup completion")
+	}
+
+	go func() {
+		model.msgChan <- LogMsg("late log")
+	}()
+	msg := cmd()
+	if got, ok := msg.(LogMsg); !ok || got != LogMsg("late log") {
+		t.Fatalf("cmd() = %#v, want LogMsg(%q)", msg, "late log")
+	}
+}
+
+func TestFormatStartupStatusLineShowsExitCode(t *testing.T) {
+	got := formatStartupStatusLine(startupItem{
+		Label:       "echo one",
+		Mode:        profile.StartupModeSync,
+		Status:      startupStatusError,
+		ExitCode:    23,
+		HasExitCode: true,
+	})
+	if !strings.Contains(got, "ERROR (23)") {
+		t.Fatalf("formatStartupStatusLine() = %q, want error exit code", got)
 	}
 }
 

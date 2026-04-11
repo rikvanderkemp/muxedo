@@ -48,6 +48,7 @@ func TestLoadProfileParsesShellFields(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 [[startup]]
 shell = "docker compose up -d"
+mode = "sync"
 
 [panel.api]
 workingdir = "."
@@ -64,6 +65,9 @@ shell_kill = "pkill -f muxedo"
 
 	if got.Startup[0].Command.Shell != "docker compose up -d" {
 		t.Fatalf("Startup[0].Command.Shell = %q", got.Startup[0].Command.Shell)
+	}
+	if got.Startup[0].Mode != StartupModeSync {
+		t.Fatalf("Startup[0].Mode = %q, want %q", got.Startup[0].Mode, StartupModeSync)
 	}
 	if got.Panels[0].Command.Shell != "go test ./..." {
 		t.Fatalf("Panels[0].Command.Shell = %q", got.Panels[0].Command.Shell)
@@ -90,6 +94,55 @@ shell = "go test"
 		t.Fatal("Load() error = nil, want error")
 	}
 	if !strings.Contains(err.Error(), `panel "api": specify exactly one of program or shell`) {
+		t.Fatalf("Load() error = %q", err)
+	}
+}
+
+func TestLoadProfileDefaultsStartupModeToAsync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[[startup]]
+program = "echo"
+args = ["hello"]
+
+[panel.api]
+workingdir = "."
+program = "go"
+args = ["test", "./..."]
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Startup[0].Mode != StartupModeAsync {
+		t.Fatalf("Startup[0].Mode = %q, want %q", got.Startup[0].Mode, StartupModeAsync)
+	}
+}
+
+func TestLoadProfileRejectsInvalidStartupMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[[startup]]
+program = "echo"
+args = ["hello"]
+mode = "later"
+
+[panel.api]
+workingdir = "."
+program = "go"
+args = ["test", "./..."]
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), `invalid mode "later"`) {
 		t.Fatalf("Load() error = %q", err)
 	}
 }

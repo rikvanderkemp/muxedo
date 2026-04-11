@@ -22,7 +22,15 @@ type PanelSpec struct {
 type StartupSpec struct {
 	WorkingDir string
 	Command    process.CommandSpec
+	Mode       StartupMode
 }
+
+type StartupMode string
+
+const (
+	StartupModeAsync StartupMode = "async"
+	StartupModeSync  StartupMode = "sync"
+)
 
 type ScrollbackConfig struct {
 	Dir      string
@@ -49,6 +57,7 @@ type rawStartup struct {
 	Shell      string   `toml:"shell"`
 	Cmd        string   `toml:"cmd"`
 	WorkingDir string   `toml:"workingdir"`
+	Mode       string   `toml:"mode"`
 }
 
 type rawPanel struct {
@@ -176,9 +185,20 @@ func Load(path string) (Profile, error) {
 			return Profile{}, err
 		}
 
+		mode := StartupModeAsync
+		if s.Mode != "" {
+			mode = StartupMode(s.Mode)
+		}
+		switch mode {
+		case StartupModeAsync, StartupModeSync:
+		default:
+			return Profile{}, fmt.Errorf("startup command at index %d: invalid mode %q (want async or sync)", i, s.Mode)
+		}
+
 		startup = append(startup, StartupSpec{
 			WorkingDir: abs,
 			Command:    cmd,
+			Mode:       mode,
 		})
 	}
 
