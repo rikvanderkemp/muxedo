@@ -12,12 +12,30 @@
 
 A terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.
 
+## Releases
+
+Official releases use Semantic Versioning tags like `v0.1.0`.
+
+- Patch releases come from merged `fix:` changes.
+- Minor releases come from merged `feat:` changes.
+- Release notes and `CHANGELOG.md` are generated automatically by GitHub.
+- `v1.0.0` is a deliberate maintainer decision and is not emitted automatically.
+
+Pull request titles and commit messages must use Conventional Commit format because release automation depends on them. Prefer squash merge so the PR title becomes the final releasable commit message.
+
+Examples:
+
+- `feat(ui): add panel maximize toggle`
+- `fix(process): stabilize scrollback IDs`
+- `docs(readme): explain release commit conventions`
+
 ## Quick start
 
 ```bash
 go build -o muxedo .
 ./muxedo -profile profile.toml
 ./muxedo -dump-config
+./muxedo -version
 ```
 
 Or run directly:

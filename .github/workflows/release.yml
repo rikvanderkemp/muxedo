@@ -11,10 +11,46 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      major: ${{ steps.guard.outputs.major }}
+    steps:
+      - uses: google-github-actions/release-please-action@v4
+        id: release
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Guard major releases
+        id: guard
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          major="false"
+          if [[ "$TAG_NAME" =~ ^v([0-9]+)\. ]]; then
+            if [[ "${BASH_REMATCH[1]}" -ge 1 ]]; then
+              major="true"
+            fi
+          fi
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+
+      - name: Block automatic 1.x releases
+        if: ${{ steps.release.outputs.release_created == 'true' && steps.guard.outputs.major == 'true' }}
+        run: |
+          echo "Automatic 1.x releases are disabled. Promote the repo intentionally before releasing ${TAG_NAME}."
+          exit 1
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+
   build-linux:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '!nobuild')) }}
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.major != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -22,76 +58,69 @@ jobs:
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Short SHA
-        id: vars
-        run: echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
+          VERSION: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          go build -trimpath -ldflags="-s -w" -o muxedo .
-          tar czvf "muxedo_${{ github.run_id }}_${{ steps.vars.outputs.short_sha }}_linux_${{ matrix.goarch }}.tar.gz" muxedo
+          COMMIT="$(git rev-parse HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -trimpath -ldflags="-s -w -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.buildDate=${BUILD_DATE}'" -o muxedo .
+          tar czf "muxedo_${VERSION#v}_linux_${GOARCH}.tar.gz" muxedo
 
       - uses: actions/upload-artifact@v4
         with:
           name: muxedo-linux-${{ matrix.goarch }}
-          path: muxedo_${{ github.run_id }}_*_linux_${{ matrix.goarch }}.tar.gz
+          path: muxedo_*_linux_${{ matrix.goarch }}.tar.gz
 
   build-macos:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '!nobuild')) }}
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.major != 'true' }}
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Short SHA
-        id: vars
-        run: echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
-
-      - name: Build amd64
+      - name: Build
         env:
           GOOS: darwin
-          GOARCH: amd64
+          GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
+          VERSION: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          go build -trimpath -ldflags="-s -w" -o muxedo-darwin-amd64 .
-          tar czvf "muxedo_${{ github.run_id }}_${{ steps.vars.outputs.short_sha }}_darwin_amd64.tar.gz" muxedo-darwin-amd64
-
-      - name: Build arm64
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-          CGO_ENABLED: "0"
-        run: |
-          go build -trimpath -ldflags="-s -w" -o muxedo-darwin-arm64 .
-          tar czvf "muxedo_${{ github.run_id }}_${{ steps.vars.outputs.short_sha }}_darwin_arm64.tar.gz" muxedo-darwin-arm64
+          COMMIT="$(git rev-parse HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -trimpath -ldflags="-s -w -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.buildDate=${BUILD_DATE}'" -o muxedo .
+          tar czf "muxedo_${VERSION#v}_darwin_${GOARCH}.tar.gz" muxedo
 
       - uses: actions/upload-artifact@v4
         with:
-          name: muxedo-darwin-amd64
-          path: muxedo_${{ github.run_id }}_*_darwin_amd64.tar.gz
+          name: muxedo-darwin-${{ matrix.goarch }}
+          path: muxedo_*_darwin_${{ matrix.goarch }}.tar.gz
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: muxedo-darwin-arm64
-          path: muxedo_${{ github.run_id }}_*_darwin_arm64.tar.gz
-
-  release:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '!nobuild')) }}
-    needs: [build-linux, build-macos]
+  publish-assets:
+    needs: [release-please, build-linux, build-macos]
+    if: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.major != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -100,22 +129,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: List assets
-        run: ls -la dist
-
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_id }}
-          target_commitish: ${{ github.sha }}
-          name: Build ${{ github.run_id }} (${{ github.sha }})
-          body: |
-            Automated build from `${{ github.ref_name }}` @ `${{ github.sha }}`
-
-            | | |
-            |-|-|
-            | Run | `${{ github.run_id }}` |
-            | Commit | `${{ github.sha }}` |
-          prerelease: true
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
