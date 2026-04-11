@@ -180,3 +180,112 @@ func TestLoadProfileRequiresPanels(t *testing.T) {
 		t.Fatalf("Load() error = %q", err)
 	}
 }
+
+func TestLoadProfilePreservesPanelDeclarationOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[panel.zeta]
+workingdir = "."
+program = "echo"
+
+[panel.alpha]
+workingdir = "."
+program = "echo"
+
+[panel.mid]
+workingdir = "."
+program = "echo"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	names := []string{got.Panels[0].Name, got.Panels[1].Name, got.Panels[2].Name}
+	if strings.Join(names, ",") != "zeta,alpha,mid" {
+		t.Fatalf("panel order = %v, want [zeta alpha mid]", names)
+	}
+}
+
+func TestLoadProfileMovesExplicitOrdersAheadOfDeclarationOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[panel.api]
+workingdir = "."
+program = "echo"
+
+[panel.logs]
+workingdir = "."
+program = "echo"
+order = 1
+
+[panel.frontend]
+workingdir = "."
+program = "echo"
+order = 0
+
+[panel.worker]
+workingdir = "."
+program = "echo"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	names := []string{got.Panels[0].Name, got.Panels[1].Name, got.Panels[2].Name, got.Panels[3].Name}
+	if strings.Join(names, ",") != "frontend,logs,api,worker" {
+		t.Fatalf("panel order = %v, want [frontend logs api worker]", names)
+	}
+}
+
+func TestLoadProfileRejectsDuplicatePanelOrders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[panel.api]
+workingdir = "."
+program = "echo"
+order = 0
+
+[panel.frontend]
+workingdir = "."
+program = "echo"
+order = 0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "duplicate order 0") {
+		t.Fatalf("Load() error = %q", err)
+	}
+}
+
+func TestLoadProfileRejectsNegativePanelOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[panel.api]
+workingdir = "."
+program = "echo"
+order = -1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "order must be non-negative") {
+		t.Fatalf("Load() error = %q", err)
+	}
+}

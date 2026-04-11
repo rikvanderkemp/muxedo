@@ -71,6 +71,7 @@ args = ["run", "."]
 
 [panel.frontend]
 workingdir = "~/code/frontend" # overrides global workingdir
+order = 0                      # optional: lower numbers are shown first
 program = "npm"
 args = ["run", "dev"]
 
@@ -88,6 +89,7 @@ shell_kill = "docker compose stop api"
   - `mode` — optional startup mode: `async` (default) or `sync`.
 - `[panel.<name>]` — each section defines a pane:
   - `workingdir` — working directory for the command.
+  - `order` — optional non-negative integer. Panels with `order` are shown first in ascending order. Panels without `order` keep their TOML file order after the ordered panels.
   - `program` — executable to run directly.
   - `args` — optional argument list used with `program`.
   - `shell` — optional shell command to run via `sh -lc`; use only when you need shell features.
@@ -99,6 +101,7 @@ Exactly one of `program` or `shell` is required for each startup command and pan
 Shell fields are intentionally explicit and should be treated as trusted local automation because they execute through `sh`.
 
 Panels are arranged in an auto-grid (near-square) layout that fills the terminal and resizes when the window changes.
+By default, panel numbering and placement follow the order of `[panel.*]` sections in the profile. Use `order` when a specific panel should take precedence without rearranging the rest of the file.
 
 ## Controls
 
