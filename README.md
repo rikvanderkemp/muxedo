@@ -54,7 +54,7 @@ go run . -profile profile.toml
 go run .
 ```
 
-When `-profile` is omitted, muxedo looks for `./.muxedo` in the working directory. If that file is not present, startup still fails with `error: -profile is required`.
+When `-profile` is omitted, muxedo looks for `./.muxedo` in the working directory. If that file is not present, muxedo prints the missing-profile error together with the full command help.
 
 ## Self-update
 

@@ -114,6 +114,54 @@ func TestRunUpdateApplyPrintsRestartMessage(t *testing.T) {
 	}
 }
 
+func TestRunHelpPrintsCommands(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"-help"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("run(-help) exitCode = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Commands:") {
+		t.Fatalf("run(-help) stderr = %q, want commands section", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "update apply") {
+		t.Fatalf("run(-help) stderr = %q, want update subcommands", stderr.String())
+	}
+}
+
+func TestRunWithoutProfilePrintsUsage(t *testing.T) {
+	tempDir := t.TempDir()
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{
+			stdout:   stdout.String(),
+			stderr:   stderr.String(),
+			exitCode: exitCode,
+		}
+	})
+
+	if result.exitCode != 1 {
+		t.Fatalf("run(nil) exitCode = %d, want 1", result.exitCode)
+	}
+	if !strings.Contains(result.stderr, "-profile is required") {
+		t.Fatalf("run(nil) stderr = %q, want missing profile error", result.stderr)
+	}
+	if !strings.Contains(result.stderr, "Commands:") {
+		t.Fatalf("run(nil) stderr = %q, want usage with commands", result.stderr)
+	}
+}
+
+type runResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
 type updaterStub struct {
 	check func(string) (update.CheckResult, error)
 	apply func(string, string) (update.ApplyResult, error)
@@ -143,6 +191,24 @@ func withWorkingDir[T any](dir string, fn func() (T, error)) (T, error) {
 	if err := os.Chdir(dir); err != nil {
 		var zero T
 		return zero, err
+	}
+	defer func() {
+		_ = os.Chdir(original)
+	}()
+
+	return fn()
+}
+
+func withWorkingDirValue[T any](dir string, fn func() T) T {
+	original, err := os.Getwd()
+	if err != nil {
+		var zero T
+		return zero
+	}
+
+	if err := os.Chdir(dir); err != nil {
+		var zero T
+		return zero
 	}
 	defer func() {
 		_ = os.Chdir(original)

@@ -39,18 +39,23 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "update" {
 		if err := runUpdate(args[1:], stdout); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
+			printUsage(stderr)
 			return 1
 		}
 		return 0
 	}
 
-	profilePath := flag.String("profile", "", "path to TOML profile file (defaults to ./.muxedo when omitted)")
-	dumpConfig := flag.Bool("dump-config", false, "write the default app config and exit")
-	force := flag.Bool("force", false, "overwrite existing files when used with dump commands")
-	showVersion := flag.Bool("version", false, "print version information and exit")
-	flag.CommandLine.SetOutput(stderr)
-	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
-	if err := flag.CommandLine.Parse(args); err != nil {
+	fs := flag.NewFlagSet("muxedo", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		printUsage(stderr)
+	}
+
+	profilePath := fs.String("profile", "", "path to TOML profile file (defaults to ./.muxedo when omitted)")
+	dumpConfig := fs.Bool("dump-config", false, "write the default app config and exit")
+	force := fs.Bool("force", false, "overwrite existing files when used with dump commands")
+	showVersion := fs.Bool("version", false, "print version information and exit")
+	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
@@ -81,6 +86,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	resolvedProfilePath, err := resolveProfilePath(*profilePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
+		printUsage(stderr)
 		return 1
 	}
 
@@ -162,4 +168,39 @@ func resolveProfilePath(flagValue string) (string, error) {
 	}
 
 	return "", fmt.Errorf("-profile is required")
+}
+
+func printUsage(w io.Writer) {
+	fmt.Fprintf(w, `muxedo runs commands from TOML profile in live auto-grid TUI.
+
+Usage:
+  muxedo [flags]
+  muxedo update <check|apply>
+
+Flags:
+  -profile string
+        path to TOML profile file (defaults to ./.muxedo when omitted)
+  -dump-config
+        write default app config and exit
+  -force
+        overwrite existing files when used with dump commands
+  -version
+        print version information and exit
+  -help
+        show this help
+
+Commands:
+  update check
+        check latest published release
+  update apply
+        download, verify, install latest published release
+
+Examples:
+  muxedo
+  muxedo -profile profile.toml
+  muxedo -dump-config
+  muxedo -version
+  muxedo update check
+  muxedo update apply
+`)
 }
