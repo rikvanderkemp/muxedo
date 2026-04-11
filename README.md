@@ -27,7 +27,7 @@ Official releases use Semantic Versioning tags like `v0.1.0`.
 - Release notes and `CHANGELOG.md` are generated automatically by GitHub.
 - `v1.0.0` is a deliberate maintainer decision and is not emitted automatically.
 
-Pull request titles and commit messages must use Conventional Commit format because release automation depends on them. Prefer squash merge so the PR title becomes the final releasable commit message.
+Pull request titles and commit messages must use Conventional Commit format because release automation depends on them. Use squash merge for releasable changes on `main`; merge commits make `release-please` emit duplicate changelog entries because it sees both the PR commit(s) and the merge commit.
 
 Examples:
 
