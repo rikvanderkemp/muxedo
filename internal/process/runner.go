@@ -248,7 +248,6 @@ func (p *Panel) RunCmdKill() {
 }
 
 func (p *Panel) Restart() error {
-	p.RunCmdKill()
 	p.Stop()
 
 	p.termMu.RLock()
