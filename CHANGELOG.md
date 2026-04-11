@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.4](https://github.com/rikvanderkemp/muxedo/compare/v0.1.3...v0.1.4) (2026-04-11)
+
+
+### Features
+
+* **update:** add self-update commands ([#12](https://github.com/rikvanderkemp/muxedo/issues/12)) ([e1e84f9](https://github.com/rikvanderkemp/muxedo/commit/e1e84f9e8f2914616c144ad5940a2b002b67cd62))
+
+
+### Bug Fixes
+
+* **release:** prevent duplicate changelog entries ([72fee30](https://github.com/rikvanderkemp/muxedo/commit/72fee304c0bf02a84f60d464864601acada47274))
+* **release:** prevent duplicate changelog entries ([b695948](https://github.com/rikvanderkemp/muxedo/commit/b6959487bd5611b84642c2c8a29f42c5326bc34c))
+
 ## [0.1.3](https://github.com/rikvanderkemp/muxedo/compare/v0.1.2...v0.1.3) (2026-04-11)
 
 
