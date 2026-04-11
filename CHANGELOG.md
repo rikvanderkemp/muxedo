@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/rikvanderkemp/muxedo/compare/v0.1.1...v0.1.2) (2026-04-11)
+
+
+### Features
+
+* **profile:** add predictable panel ordering ([730263e](https://github.com/rikvanderkemp/muxedo/commit/730263ee7a2c7369f013c267ac49dee36c13bc1b))
+* **profile:** add predictable panel ordering ([f0bfa71](https://github.com/rikvanderkemp/muxedo/commit/f0bfa7120d13179fea35a2743207cd77b6fce3e3))
+
 ## [0.1.1](https://github.com/rikvanderkemp/muxedo/compare/v0.1.0...v0.1.1) (2026-04-11)
 
 
