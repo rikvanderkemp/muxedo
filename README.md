@@ -43,8 +43,6 @@ go build -o muxedo .
 ./muxedo
 ./muxedo -dump-config
 ./muxedo -version
-./muxedo update check
-./muxedo update apply
 ```
 
 Or run directly:
@@ -55,21 +53,6 @@ go run .
 ```
 
 When `-profile` is omitted, muxedo looks for `./.muxedo` in the working directory. If that file is not present, startup still fails with `error: -profile is required`.
-
-## Self-update
-
-Official release builds can check for newer GitHub releases and replace themselves in place:
-
-```bash
-./muxedo update check
-./muxedo update apply
-```
-
-- `update check` prints current and latest release versions, then reports whether an update is available.
-- `update apply` downloads the matching release tarball for the current OS/architecture, verifies it against the published `checksums.txt`, replaces the current executable, then exits. Restart muxedo after it succeeds.
-- Self-update is unavailable for `dev` builds.
-- Self-update only supports standalone binaries installed from muxedo GitHub release tarballs. Package-manager installs may not be writable or may be managed externally.
-- If the current executable directory is not writable, update apply fails without modifying the existing binary.
 
 ## Profile format
 
