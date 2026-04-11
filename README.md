@@ -28,21 +28,37 @@ go run . -profile profile.toml
 
 ## Profile format
 
-Each `[panel.<name>]` section defines a pane:
+A profile defines the global environment, startup commands, and the layout of panel processes:
 
 ```toml
+# Global working directory fallback (optional; ~ is expanded)
+workingdir = "~/code/project"
+
+# Commands to run sequentially before the TUI starts (optional)
+[[startup]]
+cmd = "docker compose up -d"
+# workingdir = "." # optional override for this command
+
+[[startup]]
+cmd = "make migrate"
+
 [panel.api]
-workingdir = "~/code/myapi"
+# Uses global workingdir fallback
 cmd = "go run ."
 
 [panel.frontend]
-workingdir = "~/code/frontend"
+workingdir = "~/code/frontend" # overrides global workingdir
 cmd = "npm run dev"
 ```
 
-- `workingdir` — working directory for the command (`~` is expanded).
-- `cmd` — shell command to run (executed via `sh -lc`).
-- `cmd_kill` — optional shell command to run before restarting or exiting the panel.
+- `workingdir` (top-level) — optional global default for all panels and startup commands.
+- `[[startup]]` — optional array of commands to execute before the panels start.
+  - `cmd` — shell command to run (executed via `sh -c`).
+  - `workingdir` — optional working directory for this specific startup command.
+- `[panel.<name>]` — each section defines a pane:
+  - `workingdir` — working directory for the command.
+  - `cmd` — shell command to run (executed via `sh -lc`).
+  - `cmd_kill` — optional shell command to run before restarting or exiting the panel.
 
 Panels are arranged in an auto-grid (near-square) layout that fills the terminal and resizes when the window changes.
 
