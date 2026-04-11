@@ -40,6 +40,7 @@ Examples:
 ```bash
 go build -o muxedo .
 ./muxedo -profile profile.toml
+./muxedo
 ./muxedo -dump-config
 ./muxedo -version
 ```
@@ -48,7 +49,10 @@ Or run directly:
 
 ```bash
 go run . -profile profile.toml
+go run .
 ```
+
+When `-profile` is omitted, muxedo looks for `./.muxedo` in the working directory. If that file is not present, startup still fails with `error: -profile is required`.
 
 ## Profile format
 
@@ -158,7 +162,7 @@ Note: scrollback capture works best with log-style and shell output. Full-screen
 
 Muxedo also looks for an optional app-level config at `~/.config/muxedo/config.toml`.
 
-If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the required profile passed via `-profile`.
+If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the launch profile from `-profile` or the implicit `./.muxedo` fallback.
 
 To generate a complete config file with every app-level option set to its default value, run `./muxedo -dump-config`. This creates the parent directory if needed and refuses to overwrite an existing file unless you also pass `-force`.
 
