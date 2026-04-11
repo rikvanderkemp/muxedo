@@ -111,6 +111,23 @@ func TestRenderPaneShortBodyKeepsOutputVisible(t *testing.T) {
 	}
 }
 
+func TestFitLinesTrimsBlankTerminalTail(t *testing.T) {
+	raw := strings.Join([]string{
+		"Insert mode demo: type something and press Enter.",
+		"",
+		"",
+		"",
+		"",
+	}, "\n")
+
+	lines := fitLines(raw, 3, 50)
+	joined := strings.Join(lines, "\n")
+
+	if !strings.Contains(joined, "Insert mode demo") {
+		t.Fatalf("expected prompt text to stay visible, got %q", joined)
+	}
+}
+
 func TestRenderStatusLineUsesThemeColors(t *testing.T) {
 	oldProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)

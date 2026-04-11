@@ -313,6 +313,7 @@ func formatUnit(value int, suffix string) string {
 // each truncated/padded to `maxWidth`.
 func fitLines(raw string, n, maxWidth int) []string {
 	all := strings.Split(raw, "\n")
+	all = trimViewportTail(all)
 
 	// Take last n lines (tail)
 	if len(all) > n {
@@ -329,6 +330,27 @@ func fitLines(raw string, n, maxWidth int) []string {
 	}
 
 	return lines
+}
+
+func trimViewportTail(lines []string) []string {
+	lastNonEmpty := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(ansi.Strip(lines[i])) != "" {
+			lastNonEmpty = i
+			break
+		}
+	}
+	if lastNonEmpty < 0 {
+		return lines
+	}
+
+	// Keep one trailing blank row after the last visible content so prompts
+	// that end with a newline still leave space for the current input line.
+	keep := lastNonEmpty + 2
+	if keep > len(lines) {
+		keep = len(lines)
+	}
+	return lines[:keep]
 }
 
 func fitViewportLines(theme Theme, viewport *paneViewport, n, maxWidth int) []string {
