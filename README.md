@@ -12,6 +12,12 @@
 
 A terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.
 
+## Demo
+
+[![asciicast](https://asciinema.org/a/K752cVAJSuo99YQu.svg)](https://asciinema.org/a/K752cVAJSuo99YQu)
+
+Recorded demo showing async startup progress in the Message Buffer and a focused panel in insert mode.
+
 ## Releases
 
 Official releases use Semantic Versioning tags like `v0.1.0`.
