@@ -1,22 +1,24 @@
 # Global working directory fallback for all panels and startup commands (optional)
 # workingdir = "~/code/project"
 
-# Commands to run sequentially before the TUI starts (optional)
+# Commands to run sequentially in the background when the TUI starts.
+# Their output is streamed to the Message Buffer (view with Ctrl-B).
 # [[startup]]
-# cmd = "docker compose up -d"
+# program = "docker"
+# args = ["compose", "up", "-d"]
 # workingdir = "." # optional: defaults to the global 'workingdir', then to muxedo's launch directory
 
 # [[startup]]
-# cmd = "make migrate"
+# shell = "make migrate && make seed"
 
 [panel.deco]
 workingdir = "~/code/deco"
-cmd = "air"
+program = "air"
 
 [panel.worker1]
 workingdir = "~/code/demo-stack"
-cmd = "make worker.acknowledge_queue"
-cmd_kill = "make stop_worker"
+shell = "make worker.acknowledge_queue"
+shell_kill = "make stop_worker"
 
 # Optional [scrollback] — omit this section to use defaults (dir: OS cache / muxedo / scrollback; max_bytes: 1 MiB per panel)
 # [scrollback]

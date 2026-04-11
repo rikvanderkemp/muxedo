@@ -4,12 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"muxedo/internal/config"
-	"muxedo/internal/process"
 	"muxedo/internal/profile"
 	"muxedo/internal/ui"
 )
@@ -47,43 +45,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, s := range cfg.Startup {
-		fmt.Printf("Running startup command: %s\n", s.Cmd)
-		cmd := exec.Command("sh", "-c", s.Cmd)
-		cmd.Dir = s.WorkingDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "error running startup command %q: %v\n", s.Cmd, err)
-			os.Exit(1)
-		}
-	}
-
-	sb := cfg.Scrollback
-	panels := make([]*process.Panel, len(cfg.Panels))
-	for i, spec := range cfg.Panels {
-		panels[i] = process.NewWithScrollback(spec.Name, spec.Cmd, spec.CmdKill, spec.WorkingDir, sb.Dir, sb.MaxBytes)
-		panels[i].ResetScrollback()
-	}
-
-	for _, p := range panels {
-		if err := p.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "error starting %s: %v\n", p.Name, err)
-			for _, started := range panels {
-				started.Stop()
-			}
-			os.Exit(1)
-		}
-	}
-
-	model := ui.NewModel(panels, ui.ResolveTheme(appConfig.Theme))
+	model := ui.NewModelWithSpecs(cfg.Startup, cfg.Panels, cfg.Scrollback, ui.ResolveTheme(appConfig.Theme))
 	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		for _, p := range panels {
-			p.Stop()
-		}
 		os.Exit(1)
 	}
 }

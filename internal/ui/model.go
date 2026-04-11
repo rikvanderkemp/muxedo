@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -10,9 +12,16 @@ import (
 
 	"muxedo/internal/layout"
 	"muxedo/internal/process"
+	"muxedo/internal/profile"
 )
 
 type tickMsg time.Time
+
+type LogMsg string
+
+type StartupCompleteMsg struct {
+	panels []*process.Panel
+}
 
 type exitProgressMsg struct {
 	panelIdx int
@@ -55,6 +64,14 @@ type Model struct {
 	killingPanel    bool
 	killingPanelIdx int
 	killStatus      string
+
+	messageBuffer    []string
+	showBuffer       bool
+	startupCompleted bool
+	startupSpecs     []profile.StartupSpec
+	panelSpecs       []profile.PanelSpec
+	scrollbackConfig profile.ScrollbackConfig
+	msgChan          chan tea.Msg
 }
 
 func NewModel(panels []*process.Panel, themes ...Theme) Model {
@@ -64,11 +81,39 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 	}
 
 	return Model{
-		panels:         panels,
-		theme:          theme,
-		grid:           layout.Compute(len(panels)),
-		activePanel:    -1,
-		maximizedPanel: -1,
+		panels:           panels,
+		theme:            theme,
+		grid:             layout.Compute(len(panels)),
+		activePanel:      -1,
+		maximizedPanel:   -1,
+		startupCompleted: true,
+		scrollbackConfig: profile.ScrollbackConfig{},
+		msgChan:          make(chan tea.Msg),
+		sendInput: func(p *process.Panel, input []byte) error {
+			return p.WriteInput(input)
+		},
+		panelRunning: func(p *process.Panel) bool {
+			return p.Running()
+		},
+		restartPanel: func(p *process.Panel) error {
+			return p.Restart()
+		},
+		historyLines: func(p *process.Panel) []process.HistoryLine {
+			return p.History()
+		},
+	}
+}
+
+func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
+	return Model{
+		startupSpecs:     startup,
+		panelSpecs:       panels,
+		scrollbackConfig: sb,
+		theme:            theme,
+		msgChan:          make(chan tea.Msg),
+		grid:             layout.Compute(len(panels)),
+		activePanel:      -1,
+		maximizedPanel:   -1,
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -85,10 +130,102 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(tick(), tea.ClearScreen)
+	if m.startupCompleted {
+		return tea.Batch(tick(), tea.ClearScreen)
+	}
+	return tea.Batch(tick(), m.startupSequence, tea.ClearScreen)
+}
+
+func (m Model) startupSequence() tea.Msg {
+	go func() {
+		if len(m.startupSpecs) == 0 {
+			m.msgChan <- LogMsg("No startup commands specified.")
+		}
+
+		for _, spec := range m.startupSpecs {
+			label := describeCommand(spec.Command)
+			m.msgChan <- LogMsg(fmt.Sprintf("--- Running: %s", label))
+			cmd, err := spec.Command.Build(spec.WorkingDir, false)
+			if err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: could not build %q: %v", label, err))
+				continue
+			}
+
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: could not capture stdout for %q: %v", label, err))
+				continue
+			}
+			stderr, err := cmd.StderrPipe()
+			if err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: could not capture stderr for %q: %v", label, err))
+				continue
+			}
+			multi := io.MultiReader(stdout, stderr)
+
+			if err := cmd.Start(); err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: could not start %q: %v", label, err))
+				continue
+			}
+
+			scanner := bufio.NewScanner(multi)
+			for scanner.Scan() {
+				m.msgChan <- LogMsg(scanner.Text())
+			}
+
+			if err := scanner.Err(); err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: scanning output for %q: %v", label, err))
+			}
+
+			if err := cmd.Wait(); err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: command %q exited: %v", label, err))
+			}
+		}
+
+		m.msgChan <- LogMsg("--- Startup commands completed. Initializing panels...")
+
+		panels := make([]*process.Panel, len(m.panelSpecs))
+		for i, spec := range m.panelSpecs {
+			p := process.NewWithScrollbackCommandSpec(spec.Name, spec.Command, spec.KillCommand, spec.WorkingDir, m.scrollbackConfig.Dir, m.scrollbackConfig.MaxBytes)
+			p.ResetScrollback()
+			if err := p.Start(); err != nil {
+				m.msgChan <- LogMsg(fmt.Sprintf("error: starting panel %s: %v", p.Name, err))
+			}
+			panels[i] = p
+		}
+
+		m.msgChan <- StartupCompleteMsg{panels: panels}
+	}()
+	return m.waitForMsg()
+}
+
+func (m Model) waitForMsg() tea.Msg {
+	return <-m.msgChan
+}
+
+func describeCommand(cmd process.CommandSpec) string {
+	if cmd.Shell != "" {
+		return cmd.Shell
+	}
+	if len(cmd.Args) == 0 {
+		return cmd.Program
+	}
+	return cmd.Program + " " + strings.Join(cmd.Args, " ")
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case LogMsg:
+		m.messageBuffer = append(m.messageBuffer, string(msg))
+		return m, m.waitForMsg
+	case StartupCompleteMsg:
+		m.panels = msg.panels
+		m.startupCompleted = true
+		m.showBuffer = false
+		m.resizePanels()
+		return m, nil
+	}
+
 	if m.killingPanel {
 		switch msg := msg.(type) {
 		case exitProgressMsg:
@@ -123,6 +260,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+b" {
+			m.showBuffer = !m.showBuffer
+			return m, nil
+		}
+
 		if msg.Type == tea.KeyEsc {
 			if m.activePanel >= 0 {
 				if m.panelScrollMode {
@@ -181,7 +323,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if msg.Type == tea.KeyRunes && (string(msg.Runes) == "r" || string(msg.Runes) == "R") {
-					_ = m.restartPanel(p)
+					if err := m.restartPanel(p); err != nil {
+						go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: reloading panel %s: %v", p.Name, err)) }()
+					}
 					m.resizePanels()
 					return m, nil
 				}
@@ -230,7 +374,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.enterScrollMode()
 					return m, nil
 				case 'r', 'R':
-					_ = m.restartPanel(p)
+					if err := m.restartPanel(p); err != nil {
+						go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: reloading panel %s: %v", p.Name, err)) }()
+					}
 					m.resizePanels()
 					return m, nil
 				case 'x', 'X':
@@ -294,13 +440,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			for i := range m.panels {
-				now := m.panelRunning(m.panels[i])
-				if i == m.activePanel && m.prevPanelRunning[i] && !now {
-					m.maximizedPanel = -1
-					m.activePanel = -1
-					m.panelInsertMode = false
-					m.panelScrollMode = false
-					m.resizePanels()
+				p := m.panels[i]
+				now := m.panelRunning(p)
+				if m.prevPanelRunning[i] && !now {
+					if err := p.ExitError(); err != nil {
+						go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: panel %s exited: %v", p.Name, err)) }()
+					}
+					if i == m.activePanel {
+						m.maximizedPanel = -1
+						m.activePanel = -1
+						m.panelInsertMode = false
+						m.panelScrollMode = false
+						m.resizePanels()
+					}
 				}
 				m.prevPanelRunning[i] = now
 			}
@@ -309,6 +461,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) renderMessageBuffer() string {
+	gh := m.gridHeight()
+	innerH := gh - 2
+	if innerH < 0 {
+		innerH = 0
+	}
+
+	lines := m.messageBuffer
+	if len(lines) > innerH {
+		lines = lines[len(lines)-innerH:]
+	}
+
+	content := strings.Join(lines, "\n")
+	title := " MESSAGE BUFFER (ctrl+b to toggle) "
+	if !m.startupCompleted {
+		title = " STARTING MUXEDO... "
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.theme.color(m.theme.ActiveNormalBorder)).
+		Width(m.width - 2).
+		Height(gh - 2).
+		Render(lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(m.theme.color(m.theme.StatusModeNormalFG)).Render(title),
+			content,
+		))
 }
 
 func (m Model) gridHeight() int {
@@ -321,6 +502,14 @@ func (m Model) gridHeight() int {
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Starting muxedo..."
+	}
+
+	if !m.startupCompleted || m.showBuffer {
+		body := m.renderMessageBuffer()
+		if m.height > 1 {
+			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
+		}
+		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body)
 	}
 
 	gh := m.gridHeight()
@@ -424,8 +613,15 @@ func (m Model) statusModeLabel() string {
 }
 
 func (m Model) statusHint() string {
+	if !m.startupCompleted {
+		return "STARTING... · Please wait for startup commands to finish"
+	}
+	if m.showBuffer {
+		return "BUFFER: Ctrl-B toggle back · Logs of startup and events"
+	}
+
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return "No active: 1–9 focus · NORMAL: hjkl panes · Ctrl-C quit"
+		return "No active: 1–9 focus · NORMAL: hjkl panes · Ctrl-B buffer · Ctrl-C quit"
 	}
 
 	p := m.panels[m.activePanel]
@@ -449,7 +645,7 @@ func (m Model) statusHint() string {
 	} else if m.panelScrollMode {
 		parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "G live", "Esc normal")
 	} else {
-		parts = append(parts, "NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
+		parts = append(parts, "NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", "Ctrl-B buffer", escapeAction)
 	}
 
 	parts = append(parts, "README")
