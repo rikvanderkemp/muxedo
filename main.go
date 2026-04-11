@@ -12,11 +12,23 @@ import (
 	"muxedo/internal/ui"
 )
 
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
+)
+
 func main() {
 	profilePath := flag.String("profile", "", "path to TOML profile file")
 	dumpConfig := flag.Bool("dump-config", false, "write the default app config and exit")
 	force := flag.Bool("force", false, "overwrite existing files when used with dump commands")
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Fprintf(os.Stdout, "muxedo %s\ncommit: %s\nbuilt: %s\n", version, commit, buildDate)
+		return
+	}
 
 	if *dumpConfig {
 		path, err := config.WriteDefault(*force)
