@@ -22,6 +22,20 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       major: ${{ steps.guard.outputs.major }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard release history
+        run: |
+          parents="$(git rev-list --parents -n 1 HEAD)"
+          parent_count="$(awk '{print NF-1}' <<<"$parents")"
+          if [[ "$parent_count" -gt 1 ]]; then
+            echo "Release automation requires squash merges on main."
+            echo "release-please will otherwise emit duplicate changelog entries for the merge commit and the PR commit(s)."
+            exit 1
+          fi
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:
