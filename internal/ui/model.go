@@ -51,6 +51,10 @@ type Model struct {
 	exiting          bool
 	exitStatuses     []string
 	exitCompleted    int
+
+	killingPanel    bool
+	killingPanelIdx int
+	killStatus      string
 }
 
 func NewModel(panels []*process.Panel, themes ...Theme) Model {
@@ -85,6 +89,24 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.killingPanel {
+		switch msg := msg.(type) {
+		case exitProgressMsg:
+			if msg.panelIdx == m.killingPanelIdx {
+				m.killStatus = msg.status
+				// We don't immediately return m, nil here because we want to show the "exiting completed" state briefly
+				// But according to the plan, we deactivate the window.
+				// Let's stick to the plan for now: deactivate and stop showing dialog.
+				m.killingPanel = false
+				m.killingPanelIdx = -1
+				m.activePanel = -1
+				return m, nil
+			}
+		}
+		// Ignore other messages while killing a panel
+		return m, nil
+	}
+
 	if m.exiting {
 		switch msg := msg.(type) {
 		case exitProgressMsg:
@@ -149,6 +171,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			running := m.panelRunning(p)
 			if !running {
 				if m.panelInsertMode {
+					if msg.String() == "ctrl+c" {
+						return m, nil
+					}
 					return m, nil
 				}
 				if m.panelScrollMode {
@@ -168,6 +193,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.toggleMaximized()
 					case 'z', 'Z':
 						m.enterScrollMode()
+					case 'x', 'X':
+						m.killingPanel = true
+						m.killingPanelIdx = m.activePanel
+						m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
+						return m, killPanelCmd(m.activePanel, p)
 					}
 				}
 				return m, nil
@@ -179,6 +209,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if m.panelInsertMode {
+				if msg.String() == "ctrl+c" {
+					return m, nil
+				}
 				if input := keyMsgToBytes(msg); len(input) > 0 {
 					_ = m.sendInput(p, input)
 				}
@@ -200,6 +233,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_ = m.restartPanel(p)
 					m.resizePanels()
 					return m, nil
+				case 'x', 'X':
+					m.killingPanel = true
+					m.killingPanelIdx = m.activePanel
+					m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
+					return m, killPanelCmd(m.activePanel, p)
 				}
 			}
 			return m, nil
@@ -353,15 +391,21 @@ func (m Model) View() string {
 }
 
 func (m Model) wrapExiting(body string) string {
-	if !m.exiting {
+	if !m.exiting && !m.killingPanel {
 		return body
 	}
+
+	content := strings.Join(m.exitStatuses, "\n")
+	if m.killingPanel {
+		content = m.killStatus
+	}
+
 	dialogBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(1, 3).
 		Align(lipgloss.Center).
-		Render(strings.Join(m.exitStatuses, "\n"))
+		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialogBox)
 }
@@ -398,14 +442,14 @@ func (m Model) statusHint() string {
 		} else if m.panelScrollMode {
 			parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "Esc normal")
 		} else {
-			parts = append(parts, "STOPPED-NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", escapeAction)
+			parts = append(parts, "STOPPED-NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
 		}
 	} else if m.panelInsertMode {
 		parts = append(parts, "INSERT: Esc normal")
 	} else if m.panelScrollMode {
 		parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "G live", "Esc normal")
 	} else {
-		parts = append(parts, "NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", escapeAction)
+		parts = append(parts, "NORMAL: I insert", "Z scroll", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
 	}
 
 	parts = append(parts, "README")
