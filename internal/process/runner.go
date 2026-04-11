@@ -16,8 +16,8 @@ import (
 
 type Panel struct {
 	Name    string
-	Cmd     string
-	CmdKill string
+	Command CommandSpec
+	Kill    CommandSpec
 	Dir     string
 
 	ptmx       *os.File
@@ -31,29 +31,44 @@ type Panel struct {
 	runtimeMu  sync.RWMutex
 	startedAt  time.Time
 	elapsed    time.Duration
+	exitErr    error
 
 	displayMu    sync.Mutex
 	displayCache string
 	displayDirty bool
 }
 
+func (p *Panel) ExitError() error {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.exitErr
+}
+
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
 
 func New(name, cmd, cmdKill, dir string) *Panel {
+	return NewWithCommandSpec(name, CommandSpec{Shell: cmd}, CommandSpec{Shell: cmdKill}, dir)
+}
+
+func NewWithCommandSpec(name string, command, kill CommandSpec, dir string) *Panel {
 	return &Panel{
 		Name:    name,
-		Cmd:     cmd,
-		CmdKill: cmdKill,
+		Command: command,
+		Kill:    kill,
 		Dir:     dir,
 		term:    vt10x.New(vt10x.WithSize(80, 24)),
 	}
 }
 
 func NewWithScrollback(name, cmd, cmdKill, dir, scrollbackDir string, maxBytes int64) *Panel {
+	return NewWithScrollbackCommandSpec(name, CommandSpec{Shell: cmd}, CommandSpec{Shell: cmdKill}, dir, scrollbackDir, maxBytes)
+}
+
+func NewWithScrollbackCommandSpec(name string, command, kill CommandSpec, dir, scrollbackDir string, maxBytes int64) *Panel {
 	return &Panel{
 		Name:    name,
-		Cmd:     cmd,
-		CmdKill: cmdKill,
+		Command: command,
+		Kill:    kill,
 		Dir:     dir,
 		term:    vt10x.New(vt10x.WithSize(80, 24)),
 		sb:      newScrollbackWriter(scrollbackDir, name, maxBytes),
@@ -69,32 +84,42 @@ func (p *Panel) ResetScrollback() {
 }
 
 func (p *Panel) Start() error {
-	c := exec.Command("sh", "-lc", p.Cmd)
-	c.Dir = p.Dir
-	c.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
-
+	c, err := p.Command.Build(p.Dir, true)
+	if err != nil {
+		return err
+	}
 	ptmx, err := pty.Start(c)
 	if err != nil {
 		return err
 	}
 
+	p.termMu.RLock()
+	cols, rows := p.term.Size()
+	p.termMu.RUnlock()
+	_ = pty.Setsize(ptmx, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
+
+	p.runtimeMu.Lock()
 	p.cmd = c
 	p.ptmx = ptmx
-	p.runtimeMu.Lock()
 	p.startedAt = time.Now()
 	p.elapsed = 0
+	p.exitErr = nil
 	p.runtimeMu.Unlock()
+
 	p.running.Store(true)
 	p.markDisplayDirty()
 
-	go p.readLoop()
+	go p.readLoop(ptmx, c)
 	return nil
 }
 
-func (p *Panel) readLoop() {
+func (p *Panel) readLoop(ptmx *os.File, cmd *exec.Cmd) {
 	buf := make([]byte, 4096)
 	for {
-		n, err := p.ptmx.Read(buf)
+		n, err := ptmx.Read(buf)
 		if n > 0 {
 			p.appendHistory(buf[:n])
 			p.termMu.Lock()
@@ -107,10 +132,22 @@ func (p *Panel) readLoop() {
 			}
 		}
 		if err != nil {
-			p.markStopped()
-			return
+			break
 		}
 	}
+
+	var exitErr error
+	if cmd != nil {
+		exitErr = cmd.Wait()
+	}
+
+	p.runtimeMu.Lock()
+	if p.ptmx == ptmx && p.exitErr == nil {
+		p.exitErr = exitErr
+	}
+	p.runtimeMu.Unlock()
+
+	p.markStoppedFor(ptmx)
 }
 
 func (p *Panel) Output() string {
@@ -125,8 +162,13 @@ func (p *Panel) Resize(cols, rows int) {
 		p.term.Write(replay) //nolint:errcheck
 	}
 	p.termMu.Unlock()
-	if p.ptmx != nil {
-		_ = pty.Setsize(p.ptmx, &pty.Winsize{
+
+	p.runtimeMu.RLock()
+	ptmx := p.ptmx
+	p.runtimeMu.RUnlock()
+
+	if ptmx != nil {
+		_ = pty.Setsize(ptmx, &pty.Winsize{
 			Rows: uint16(rows),
 			Cols: uint16(cols),
 		})
@@ -142,52 +184,81 @@ func (p *Panel) Running() bool {
 }
 
 func (p *Panel) Stop() {
-	p.markStopped()
-	if p.ptmx != nil {
+	p.runtimeMu.Lock()
+	ptmx := p.ptmx
+	cmd := p.cmd
+	p.runtimeMu.Unlock()
+
+	p.markStoppedFor(ptmx)
+
+	if ptmx != nil {
 		// Send Ctrl+C (0x03) to the pty
-		_, _ = p.ptmx.Write([]byte{0x03})
+		_, _ = ptmx.Write([]byte{0x03})
 		// Give it a tiny moment to process
 		time.Sleep(10 * time.Millisecond)
-		p.ptmx.Close()
-		p.ptmx = nil
+		ptmx.Close()
+
+		p.runtimeMu.Lock()
+		if p.ptmx == ptmx {
+			p.ptmx = nil
+		}
+		p.runtimeMu.Unlock()
 	}
-	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Signal(os.Interrupt)
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(os.Interrupt)
 
 		// Wait for the process to exit with a timeout
 		done := make(chan error, 1)
 		go func() {
-			done <- p.cmd.Wait()
+			done <- cmd.Wait()
 		}()
 
+		var exitErr error
 		select {
-		case <-done:
+		case err := <-done:
+			exitErr = err
 			// Process exited gracefully
 		case <-time.After(200 * time.Millisecond):
 			// Force kill if it didn't exit after 200ms
-			_ = p.cmd.Process.Kill()
-			<-done // wait for the kill to complete
+			_ = cmd.Process.Kill()
+			exitErr = <-done // wait for the kill to complete
 		}
-		p.cmd = nil
+
+		p.runtimeMu.Lock()
+		if p.cmd == cmd {
+			p.cmd = nil
+			if p.exitErr == nil {
+				p.exitErr = exitErr
+			}
+		}
+		p.runtimeMu.Unlock()
 	}
 }
 
 func (p *Panel) RunCmdKill() {
-	if p.CmdKill == "" {
+	if p.Kill.IsZero() {
 		return
 	}
-	c := exec.Command("sh", "-lc", p.CmdKill)
-	c.Dir = p.Dir
-	c.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
+	c, err := p.Kill.Build(p.Dir, true)
+	if err != nil {
+		return
+	}
 	_ = c.Run()
 }
 
 func (p *Panel) Restart() error {
 	p.RunCmdKill()
 	p.Stop()
+
+	p.termMu.RLock()
+	cols, rows := p.term.Size()
+	p.termMu.RUnlock()
+
 	p.termMu.Lock()
-	p.term = vt10x.New(vt10x.WithSize(80, 24))
+	p.term = vt10x.New(vt10x.WithSize(cols, rows))
 	p.termMu.Unlock()
+
 	p.historyMu.Lock()
 	p.rawHistory = nil
 	p.historyMu.Unlock()
@@ -244,10 +315,14 @@ func (p *Panel) History() []HistoryLine {
 }
 
 func (p *Panel) WriteInput(data []byte) error {
-	if p.ptmx == nil {
+	p.runtimeMu.RLock()
+	ptmx := p.ptmx
+	p.runtimeMu.RUnlock()
+
+	if ptmx == nil {
 		return errors.New("panel process not started")
 	}
-	_, err := p.ptmx.Write(data)
+	_, err := ptmx.Write(data)
 	return err
 }
 
@@ -281,7 +356,14 @@ func (p *Panel) historySnapshot() []byte {
 	return cp
 }
 
-func (p *Panel) markStopped() {
+func (p *Panel) markStoppedFor(ptmx *os.File) {
+	p.runtimeMu.Lock()
+	if ptmx != nil && p.ptmx != ptmx {
+		p.runtimeMu.Unlock()
+		return
+	}
+	p.runtimeMu.Unlock()
+
 	if !p.running.Swap(false) {
 		return
 	}

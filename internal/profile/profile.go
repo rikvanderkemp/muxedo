@@ -8,18 +8,20 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+
+	"muxedo/internal/process"
 )
 
 type PanelSpec struct {
-	Name       string
-	WorkingDir string
-	Cmd        string
-	CmdKill    string
+	Name        string
+	WorkingDir  string
+	Command     process.CommandSpec
+	KillCommand process.CommandSpec
 }
 
 type StartupSpec struct {
-	Cmd        string
 	WorkingDir string
+	Command    process.CommandSpec
 }
 
 type ScrollbackConfig struct {
@@ -42,14 +44,23 @@ type rawProfile struct {
 }
 
 type rawStartup struct {
-	Cmd        string `toml:"cmd"`
-	WorkingDir string `toml:"workingdir"`
+	Program    string   `toml:"program"`
+	Args       []string `toml:"args"`
+	Shell      string   `toml:"shell"`
+	Cmd        string   `toml:"cmd"`
+	WorkingDir string   `toml:"workingdir"`
 }
 
 type rawPanel struct {
-	WorkingDir string `toml:"workingdir"`
-	Cmd        string `toml:"cmd"`
-	CmdKill    string `toml:"cmd_kill"`
+	WorkingDir  string   `toml:"workingdir"`
+	Program     string   `toml:"program"`
+	Args        []string `toml:"args"`
+	Shell       string   `toml:"shell"`
+	KillProgram string   `toml:"kill_program"`
+	KillArgs    []string `toml:"kill_args"`
+	ShellKill   string   `toml:"shell_kill"`
+	Cmd         string   `toml:"cmd"`
+	CmdKill     string   `toml:"cmd_kill"`
 }
 
 type rawScrollback struct {
@@ -90,8 +101,8 @@ func Load(path string) (Profile, error) {
 	panels := make([]PanelSpec, 0, len(names))
 	for _, name := range names {
 		p := raw.Panel[name]
-		if p.Cmd == "" {
-			return Profile{}, fmt.Errorf("panel %q: cmd is required", name)
+		if p.Cmd != "" || p.CmdKill != "" {
+			return Profile{}, fmt.Errorf("panel %q: legacy cmd/cmd_kill fields are no longer supported; use program/args or shell/shell_kill", name)
 		}
 
 		dir := p.WorkingDir
@@ -107,18 +118,39 @@ func Load(path string) (Profile, error) {
 		if err != nil {
 			return Profile{}, fmt.Errorf("panel %q: resolving workingdir: %w", name, err)
 		}
+
+		cmd := process.CommandSpec{
+			Program: p.Program,
+			Args:    p.Args,
+			Shell:   p.Shell,
+		}
+		if err := cmd.Validate(fmt.Sprintf("panel %q", name)); err != nil {
+			return Profile{}, err
+		}
+
+		kill := process.CommandSpec{
+			Program: p.KillProgram,
+			Args:    p.KillArgs,
+			Shell:   p.ShellKill,
+		}
+		if !kill.IsZero() {
+			if err := kill.Validate(fmt.Sprintf("panel %q kill command", name)); err != nil {
+				return Profile{}, err
+			}
+		}
+
 		panels = append(panels, PanelSpec{
-			Name:       name,
-			WorkingDir: abs,
-			Cmd:        p.Cmd,
-			CmdKill:    p.CmdKill,
+			Name:        name,
+			WorkingDir:  abs,
+			Command:     cmd,
+			KillCommand: kill,
 		})
 	}
 
 	startup := make([]StartupSpec, 0, len(raw.Startup))
 	for i, s := range raw.Startup {
-		if s.Cmd == "" {
-			return Profile{}, fmt.Errorf("startup command at index %d: cmd is required", i)
+		if s.Cmd != "" {
+			return Profile{}, fmt.Errorf("startup command at index %d: legacy cmd field is no longer supported; use program/args or shell", i)
 		}
 
 		dir := s.WorkingDir
@@ -134,9 +166,19 @@ func Load(path string) (Profile, error) {
 		if err != nil {
 			return Profile{}, fmt.Errorf("startup command at index %d: resolving workingdir: %w", i, err)
 		}
+
+		cmd := process.CommandSpec{
+			Program: s.Program,
+			Args:    s.Args,
+			Shell:   s.Shell,
+		}
+		if err := cmd.Validate(fmt.Sprintf("startup command at index %d", i)); err != nil {
+			return Profile{}, err
+		}
+
 		startup = append(startup, StartupSpec{
-			Cmd:        s.Cmd,
 			WorkingDir: abs,
+			Command:    cmd,
 		})
 	}
 

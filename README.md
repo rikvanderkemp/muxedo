@@ -34,31 +34,48 @@ A profile defines the global environment, startup commands, and the layout of pa
 # Global working directory fallback (optional; ~ is expanded)
 workingdir = "~/code/project"
 
-# Commands to run sequentially before the TUI starts (optional)
+# Commands to run sequentially in the background when the TUI starts (optional)
+# Their output is streamed to the Message Buffer (Ctrl-B)
 [[startup]]
-cmd = "docker compose up -d"
+program = "docker"
+args = ["compose", "up", "-d"]
 # workingdir = "." # optional override for this command
 
 [[startup]]
-cmd = "make migrate"
+shell = "make migrate && make seed"
 
 [panel.api]
 # Uses global workingdir fallback
-cmd = "go run ."
+program = "go"
+args = ["run", "."]
 
 [panel.frontend]
 workingdir = "~/code/frontend" # overrides global workingdir
-cmd = "npm run dev"
+program = "npm"
+args = ["run", "dev"]
+
+[panel.logs]
+shell = "docker compose logs -f api | jq -R ."
+shell_kill = "docker compose stop api"
 ```
 
 - `workingdir` (top-level) — optional global default for all panels and startup commands.
-- `[[startup]]` — optional array of commands to execute before the panels start.
-  - `cmd` — shell command to run (executed via `sh -c`).
+- `[[startup]]` — optional array of commands to execute in the background when the application starts. The TUI remains active and displays their progress in the Message Buffer.
+  - `program` — executable to run directly.
+  - `args` — optional argument list used with `program`.
+  - `shell` — optional shell command to run via `sh -c`; use only when you need shell features like pipes, redirects, or `&&`.
   - `workingdir` — optional working directory for this specific startup command.
 - `[panel.<name>]` — each section defines a pane:
   - `workingdir` — working directory for the command.
-  - `cmd` — shell command to run (executed via `sh -lc`).
-  - `cmd_kill` — optional shell command to run before restarting or exiting the panel.
+  - `program` — executable to run directly.
+  - `args` — optional argument list used with `program`.
+  - `shell` — optional shell command to run via `sh -lc`; use only when you need shell features.
+  - `kill_program` / `kill_args` — optional direct command to run before restarting or exiting the panel.
+  - `shell_kill` — optional explicit shell command to run before restarting or exiting the panel.
+
+Exactly one of `program` or `shell` is required for each startup command and panel. Legacy `cmd` / `cmd_kill` fields are no longer supported.
+
+Shell fields are intentionally explicit and should be treated as trusted local automation because they execute through `sh`.
 
 Panels are arranged in an auto-grid (near-square) layout that fills the terminal and resizes when the window changes.
 
@@ -83,6 +100,7 @@ Panels are arranged in an auto-grid (near-square) layout that fills the terminal
 - Pressing **`Esc`** from maximized **normal** mode restores the grid and clears focus.
 - When a panel process exits, the panel shows a "Press R to reload" overlay. In **normal** mode, press **`R`** (or **`r`**) to restart the command.
 - **`q`** or **`Ctrl+C`** — quit and stop all subprocesses (only when no panel is active).
+- **`Ctrl+B`** — toggle the **Message Buffer** at any time to see logs and startup progress.
 
 ## Scrollback
 
@@ -148,4 +166,3 @@ status_mode_insert_bg = "#00af00"
 status_hint_fg = "#d0d0d0"
 status_hint_bg = "#444444"
 ```
-
