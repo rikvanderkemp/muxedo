@@ -144,12 +144,30 @@ func (p *Panel) Running() bool {
 func (p *Panel) Stop() {
 	p.markStopped()
 	if p.ptmx != nil {
+		// Send Ctrl+C (0x03) to the pty
+		_, _ = p.ptmx.Write([]byte{0x03})
+		// Give it a tiny moment to process
+		time.Sleep(10 * time.Millisecond)
 		p.ptmx.Close()
 		p.ptmx = nil
 	}
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Signal(os.Interrupt)
-		_ = p.cmd.Wait()
+
+		// Wait for the process to exit with a timeout
+		done := make(chan error, 1)
+		go func() {
+			done <- p.cmd.Wait()
+		}()
+
+		select {
+		case <-done:
+			// Process exited gracefully
+		case <-time.After(200 * time.Millisecond):
+			// Force kill if it didn't exit after 200ms
+			_ = p.cmd.Process.Kill()
+			<-done // wait for the kill to complete
+		}
 		p.cmd = nil
 	}
 }

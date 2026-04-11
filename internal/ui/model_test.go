@@ -230,17 +230,14 @@ func TestUpdateActivePanelCapturesKeyboard(t *testing.T) {
 	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model = next.(Model)
 	if cmd != nil {
-		t.Fatalf("expected ctrl+c to be captured by active panel")
+		t.Fatalf("expected ctrl+c to be ignored by active panel")
 	}
 
-	if len(writes) != 2 {
-		t.Fatalf("expected 2 key writes, got %d", len(writes))
+	if len(writes) != 1 {
+		t.Fatalf("expected 1 key write (only 'q'), got %d", len(writes))
 	}
 	if string(writes[0]) != "q" {
 		t.Fatalf("expected first write to be q, got %q", string(writes[0]))
-	}
-	if len(writes[1]) != 1 || writes[1][0] != 0x03 {
-		t.Fatalf("expected second write to be ctrl+c (0x03), got %v", writes[1])
 	}
 }
 
@@ -1057,5 +1054,42 @@ func TestStatusModeLabelIncludesScroll(t *testing.T) {
 
 	if got := model.statusModeLabel(); got != "SCROLL" {
 		t.Fatalf("expected SCROLL when focused in scroll mode, got %q", got)
+	}
+}
+
+func TestXShortcutKillsPanel(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.panelRunning = func(p *process.Panel) bool { return true }
+
+	// Press 'x'
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = next.(Model)
+
+	if !model.killingPanel {
+		t.Fatal("expected killingPanel state to be true")
+	}
+	if model.killingPanelIdx != 0 {
+		t.Fatalf("expected killingPanelIdx to be 0, got %d", model.killingPanelIdx)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to be returned")
+	}
+
+	// Simulate exitProgressMsg
+	msg := exitProgressMsg{panelIdx: 0, status: "exiting panel one.... exiting completed..."}
+	next, cmd = model.Update(msg)
+	model = next.(Model)
+
+	if model.killingPanel {
+		t.Fatal("expected killingPanel state to be false")
+	}
+	if model.activePanel != -1 {
+		t.Fatalf("expected activePanel to be -1, got %d", model.activePanel)
+	}
+	if cmd != nil {
+		t.Fatal("expected no more commands")
 	}
 }
