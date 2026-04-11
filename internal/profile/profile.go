@@ -8,12 +8,14 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 
 	"muxedo/internal/process"
 )
 
 type PanelSpec struct {
 	Name        string
+	Order       *int
 	WorkingDir  string
 	Command     process.CommandSpec
 	KillCommand process.CommandSpec
@@ -62,6 +64,7 @@ type rawStartup struct {
 
 type rawPanel struct {
 	WorkingDir  string   `toml:"workingdir"`
+	Order       *int     `toml:"order"`
 	Program     string   `toml:"program"`
 	Args        []string `toml:"args"`
 	Shell       string   `toml:"shell"`
@@ -101,17 +104,36 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("profile has no [panel.*] sections")
 	}
 
-	names := make([]string, 0, len(raw.Panel))
-	for name := range raw.Panel {
-		names = append(names, name)
+	declaredPanelNames, err := panelDeclarationOrder(data)
+	if err != nil {
+		return Profile{}, fmt.Errorf("parsing profile panel order: %w", err)
 	}
-	sort.Strings(names)
 
-	panels := make([]PanelSpec, 0, len(names))
-	for _, name := range names {
-		p := raw.Panel[name]
+	type panelEntry struct {
+		name             string
+		declarationIndex int
+		order            *int
+		spec             PanelSpec
+	}
+
+	entries := make([]panelEntry, 0, len(raw.Panel))
+	explicitOrders := make(map[int]string, len(raw.Panel))
+	for declarationIndex, name := range declaredPanelNames {
+		p, ok := raw.Panel[name]
+		if !ok {
+			continue
+		}
 		if p.Cmd != "" || p.CmdKill != "" {
 			return Profile{}, fmt.Errorf("panel %q: legacy cmd/cmd_kill fields are no longer supported; use program/args or shell/shell_kill", name)
+		}
+		if p.Order != nil {
+			if *p.Order < 0 {
+				return Profile{}, fmt.Errorf("panel %q: order must be non-negative", name)
+			}
+			if existing, exists := explicitOrders[*p.Order]; exists {
+				return Profile{}, fmt.Errorf("panels %q and %q use duplicate order %d", existing, name, *p.Order)
+			}
+			explicitOrders[*p.Order] = name
 		}
 
 		dir := p.WorkingDir
@@ -148,12 +170,42 @@ func Load(path string) (Profile, error) {
 			}
 		}
 
-		panels = append(panels, PanelSpec{
-			Name:        name,
-			WorkingDir:  abs,
-			Command:     cmd,
-			KillCommand: kill,
+		entries = append(entries, panelEntry{
+			name:             name,
+			declarationIndex: declarationIndex,
+			order:            p.Order,
+			spec: PanelSpec{
+				Name:        name,
+				Order:       p.Order,
+				WorkingDir:  abs,
+				Command:     cmd,
+				KillCommand: kill,
+			},
 		})
+	}
+	if len(entries) != len(raw.Panel) {
+		return Profile{}, fmt.Errorf("could not determine declaration order for all [panel.*] sections")
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		left := entries[i]
+		right := entries[j]
+		switch {
+		case left.order != nil && right.order != nil:
+			if *left.order != *right.order {
+				return *left.order < *right.order
+			}
+		case left.order != nil:
+			return true
+		case right.order != nil:
+			return false
+		}
+		return left.declarationIndex < right.declarationIndex
+	})
+
+	panels := make([]PanelSpec, 0, len(entries))
+	for _, entry := range entries {
+		panels = append(panels, entry.spec)
 	}
 
 	startup := make([]StartupSpec, 0, len(raw.Startup))
@@ -254,4 +306,38 @@ func expandHome(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+func panelDeclarationOrder(data []byte) ([]string, error) {
+	parser := unstable.Parser{}
+	parser.Reset(data)
+
+	var names []string
+	seen := make(map[string]struct{})
+	for parser.NextExpression() {
+		expr := parser.Expression()
+		if expr.Kind != unstable.Table {
+			continue
+		}
+
+		key := make([]string, 0, 2)
+		iter := expr.Key()
+		for iter.Next() {
+			key = append(key, string(iter.Node().Data))
+		}
+		if len(key) != 2 || key[0] != "panel" {
+			continue
+		}
+
+		name := key[1]
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if err := parser.Error(); err != nil {
+		return nil, err
+	}
+	return names, nil
 }
