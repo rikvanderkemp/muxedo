@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/rikvanderkemp/muxedo/compare/v0.1.4...v0.1.5) (2026-04-11)
+
+
+### Features
+
+* **cli:** show command help on startup errors ([#14](https://github.com/rikvanderkemp/muxedo/issues/14)) ([9cf110b](https://github.com/rikvanderkemp/muxedo/commit/9cf110b3a8b71ce40e813accd90b4cdd57f32d96))
+
 ## [0.1.4](https://github.com/rikvanderkemp/muxedo/compare/v0.1.3...v0.1.4) (2026-04-11)
 
 
