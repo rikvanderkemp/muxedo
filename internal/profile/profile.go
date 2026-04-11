@@ -17,6 +17,11 @@ type PanelSpec struct {
 	CmdKill    string
 }
 
+type StartupSpec struct {
+	Cmd        string
+	WorkingDir string
+}
+
 type ScrollbackConfig struct {
 	Dir      string
 	MaxBytes int64
@@ -24,12 +29,21 @@ type ScrollbackConfig struct {
 
 type Profile struct {
 	Panels     []PanelSpec
+	Startup    []StartupSpec
 	Scrollback ScrollbackConfig
+	WorkingDir string
 }
 
 type rawProfile struct {
+	WorkingDir string              `toml:"workingdir"`
+	Startup    []rawStartup        `toml:"startup"`
 	Panel      map[string]rawPanel `toml:"panel"`
 	Scrollback rawScrollback       `toml:"scrollback"`
+}
+
+type rawStartup struct {
+	Cmd        string `toml:"cmd"`
+	WorkingDir string `toml:"workingdir"`
 }
 
 type rawPanel struct {
@@ -54,6 +68,15 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("parsing profile: %w", err)
 	}
 
+	globalWorkingDir := expandHome(raw.WorkingDir)
+	if globalWorkingDir != "" {
+		abs, err := filepath.Abs(globalWorkingDir)
+		if err != nil {
+			return Profile{}, fmt.Errorf("resolving global workingdir: %w", err)
+		}
+		globalWorkingDir = abs
+	}
+
 	if len(raw.Panel) == 0 {
 		return Profile{}, fmt.Errorf("profile has no [panel.*] sections")
 	}
@@ -70,10 +93,16 @@ func Load(path string) (Profile, error) {
 		if p.Cmd == "" {
 			return Profile{}, fmt.Errorf("panel %q: cmd is required", name)
 		}
-		if p.WorkingDir == "" {
-			return Profile{}, fmt.Errorf("panel %q: workingdir is required", name)
+
+		dir := p.WorkingDir
+		if dir == "" {
+			dir = globalWorkingDir
 		}
-		dir := expandHome(p.WorkingDir)
+		if dir == "" {
+			return Profile{}, fmt.Errorf("panel %q: workingdir is required (none specified for panel or globally)", name)
+		}
+
+		dir = expandHome(dir)
 		abs, err := filepath.Abs(dir)
 		if err != nil {
 			return Profile{}, fmt.Errorf("panel %q: resolving workingdir: %w", name, err)
@@ -86,12 +115,42 @@ func Load(path string) (Profile, error) {
 		})
 	}
 
+	startup := make([]StartupSpec, 0, len(raw.Startup))
+	for i, s := range raw.Startup {
+		if s.Cmd == "" {
+			return Profile{}, fmt.Errorf("startup command at index %d: cmd is required", i)
+		}
+
+		dir := s.WorkingDir
+		if dir == "" {
+			dir = globalWorkingDir
+		}
+		if dir == "" {
+			dir = "."
+		}
+
+		dir = expandHome(dir)
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return Profile{}, fmt.Errorf("startup command at index %d: resolving workingdir: %w", i, err)
+		}
+		startup = append(startup, StartupSpec{
+			Cmd:        s.Cmd,
+			WorkingDir: abs,
+		})
+	}
+
 	sb, err := resolveScrollback(raw.Scrollback)
 	if err != nil {
 		return Profile{}, err
 	}
 
-	return Profile{Panels: panels, Scrollback: sb}, nil
+	return Profile{
+		Panels:     panels,
+		Startup:    startup,
+		Scrollback: sb,
+		WorkingDir: globalWorkingDir,
+	}, nil
 }
 
 const defaultMaxBytes int64 = 1 << 20 // 1 MiB per panel

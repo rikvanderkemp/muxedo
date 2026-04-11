@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -44,6 +45,18 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+
+	for _, s := range cfg.Startup {
+		fmt.Printf("Running startup command: %s\n", s.Cmd)
+		cmd := exec.Command("sh", "-c", s.Cmd)
+		cmd.Dir = s.WorkingDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "error running startup command %q: %v\n", s.Cmd, err)
+			os.Exit(1)
+		}
 	}
 
 	sb := cfg.Scrollback

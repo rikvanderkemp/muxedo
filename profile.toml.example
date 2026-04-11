@@ -1,3 +1,14 @@
+# Global working directory fallback for all panels and startup commands (optional)
+# workingdir = "~/code/project"
+
+# Commands to run sequentially before the TUI starts (optional)
+# [[startup]]
+# cmd = "docker compose up -d"
+# workingdir = "." # optional: defaults to the global 'workingdir', then to muxedo's launch directory
+
+# [[startup]]
+# cmd = "make migrate"
+
 [panel.deco]
 workingdir = "~/code/deco"
 cmd = "air"
