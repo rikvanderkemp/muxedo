@@ -323,15 +323,7 @@ func formatUnit(value int, suffix string) string {
 // fitLines takes the VT screen dump and returns exactly `n` lines,
 // each truncated/padded to `maxWidth`.
 func fitLines(view process.DisplayState, n, maxWidth int, showCursor bool) []string {
-	all := strings.Split(view.Output, "\n")
-	all = trimViewportTail(all, visibleCursorRow(view, showCursor))
-
-	start := 0
-	// Take last n lines (tail)
-	if len(all) > n {
-		start = len(all) - n
-		all = all[start:]
-	}
+	all, start := visibleViewportLines(view.Output, n, visibleCursorRow(view, showCursor))
 
 	lines := make([]string, n)
 	for i := 0; i < n; i++ {
@@ -350,6 +342,18 @@ func fitLines(view process.DisplayState, n, maxWidth int, showCursor bool) []str
 	}
 
 	return lines
+}
+
+func visibleViewportLines(raw string, n, cursorRow int) ([]string, int) {
+	all := strings.Split(raw, "\n")
+	all = trimViewportTail(all, cursorRow)
+
+	start := 0
+	if len(all) > n {
+		start = len(all) - n
+		all = all[start:]
+	}
+	return all, start
 }
 
 func visibleCursorRow(view process.DisplayState, showCursor bool) int {

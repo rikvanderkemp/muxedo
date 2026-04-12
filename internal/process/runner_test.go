@@ -2,6 +2,8 @@
 package process
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -256,6 +258,22 @@ func TestRunCmdKillReportsCommandError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "run kill command") {
 		t.Fatalf("RunCmdKill() error = %v, want wrapped run error", err)
+	}
+}
+
+func TestRunCmdKillTimesOut(t *testing.T) {
+	p := NewWithCommandSpec("test", CommandSpec{Shell: "true"}, CommandSpec{Shell: "sleep 1"}, ".")
+	p.killTimeout = 20 * time.Millisecond
+
+	err := p.RunCmdKill()
+	if err == nil {
+		t.Fatal("RunCmdKill() error = nil, want timeout")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunCmdKill() error = %v, want context deadline exceeded", err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("RunCmdKill() error = %v, want timeout detail", err)
 	}
 }
 

@@ -214,6 +214,10 @@ func (m Model) emitMsg(msg tea.Msg) bool {
 	}
 }
 
+func (m Model) emitMsgBlocking(msg tea.Msg) {
+	m.msgChan <- msg
+}
+
 func (m Model) Init() tea.Cmd {
 	if m.startupCompleted {
 		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen)
@@ -243,7 +247,7 @@ func (m Model) startupSequence() tea.Msg {
 			panels[i] = p
 		}
 
-		m.emitMsg(StartupCompleteMsg{panels: panels})
+		m.emitMsgBlocking(StartupCompleteMsg{panels: panels})
 	}()
 	return nil
 }
@@ -266,12 +270,12 @@ func newStartupItems(specs []profile.StartupSpec) []startupItem {
 
 func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
 	label := describeCommand(spec.Command)
-	m.emitMsg(startupStatusMsg{idx: idx, status: startupStatusRunning})
+	m.emitMsgBlocking(startupStatusMsg{idx: idx, status: startupStatusRunning})
 	m.emitMsg(LogMsg(fmt.Sprintf("--- Starting %s (%s)", label, spec.Mode)))
 
 	cmd, stdout, stderr, err := buildStartupCommand(spec)
 	if err != nil {
-		m.emitMsg(startupStatusMsg{
+		m.emitMsgBlocking(startupStatusMsg{
 			idx:     idx,
 			status:  startupStatusError,
 			errText: err.Error(),
@@ -285,7 +289,11 @@ func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
 	go m.streamStartupOutput(idx, stderr, done)
 
 	if err := cmd.Start(); err != nil {
-		m.emitMsg(startupStatusMsg{
+		_ = stdout.Close()
+		_ = stderr.Close()
+		<-done
+		<-done
+		m.emitMsgBlocking(startupStatusMsg{
 			idx:     idx,
 			status:  startupStatusError,
 			errText: fmt.Sprintf("start failed: %v", err),
@@ -309,7 +317,7 @@ func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
 			statusMsg.exitCode, statusMsg.hasExitCode, statusMsg.errText = commandExitDetails(err)
 			m.emitMsg(LogMsg(fmt.Sprintf("error: command %q exited: %v", label, err)))
 		}
-		m.emitMsg(statusMsg)
+		m.emitMsgBlocking(statusMsg)
 	}
 
 	if spec.Mode == profile.StartupModeSync {
@@ -1483,7 +1491,20 @@ func (m *Model) selectionLinesForPanel(idx, pageSize int) ([]string, []string) {
 	}
 
 	view := m.displayForView(m.panels[idx])
-	return fitLines(view, pageSize, width, false), fitLines(process.DisplayState{Output: ansi.Strip(view.Output)}, pageSize, width, false)
+	rawLines, _ := visibleViewportLines(view.Output, pageSize, -1)
+	lines := make([]string, pageSize)
+	plainLines := make([]string, pageSize)
+	for i := 0; i < pageSize; i++ {
+		if i < len(rawLines) {
+			lines[i] = padOrTruncate(rawLines[i], width)
+			plainLines[i] = padOrTruncate(ansi.Strip(rawLines[i]), width)
+			continue
+		}
+		fill := strings.Repeat(" ", width)
+		lines[i] = fill
+		plainLines[i] = fill
+	}
+	return lines, plainLines
 }
 
 func (m Model) activePaneContentWidth() int {

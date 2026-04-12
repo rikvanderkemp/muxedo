@@ -192,21 +192,7 @@ func mergeHistoryLines(scrollback, screen []string) []string {
 		return append([]string(nil), scrollback...)
 	}
 
-	maxOverlap := min(len(scrollback), len(screen))
-	overlap := 0
-	for k := maxOverlap; k >= 1; k-- {
-		match := true
-		for i := 0; i < k; i++ {
-			if scrollback[len(scrollback)-k+i] != screen[i] {
-				match = false
-				break
-			}
-		}
-		if match {
-			overlap = k
-			break
-		}
-	}
+	overlap := longestSuffixPrefixOverlap(scrollback, screen)
 
 	merged := make([]string, 0, len(scrollback)+len(screen)-overlap)
 	merged = append(merged, scrollback...)
@@ -222,21 +208,15 @@ func mergeHistoryLineRecords(scrollback, screen []HistoryLine) []HistoryLine {
 		return append([]HistoryLine(nil), scrollback...)
 	}
 
-	maxOverlap := min(len(scrollback), len(screen))
-	overlap := 0
-	for k := maxOverlap; k >= 1; k-- {
-		match := true
-		for i := 0; i < k; i++ {
-			if scrollback[len(scrollback)-k+i].ID != screen[i].ID {
-				match = false
-				break
-			}
-		}
-		if match {
-			overlap = k
-			break
-		}
+	scrollbackIDs := make([]uint64, len(scrollback))
+	for i, line := range scrollback {
+		scrollbackIDs[i] = line.ID
 	}
+	screenIDs := make([]uint64, len(screen))
+	for i, line := range screen {
+		screenIDs[i] = line.ID
+	}
+	overlap := longestSuffixPrefixOverlap(scrollbackIDs, screenIDs)
 
 	// Drop the scrollback tail that duplicates the live screen prefix (matched by ID),
 	// then append the full current screen so in-place row updates keep stable IDs
@@ -249,6 +229,38 @@ func mergeHistoryLineRecords(scrollback, screen []HistoryLine) []HistoryLine {
 	}
 	merged = append(merged, screen...)
 	return merged
+}
+
+func longestSuffixPrefixOverlap[T comparable](text, pattern []T) int {
+	if len(text) == 0 || len(pattern) == 0 {
+		return 0
+	}
+
+	lps := make([]int, len(pattern))
+	for i, j := 1, 0; i < len(pattern); {
+		if pattern[i] == pattern[j] {
+			j++
+			lps[i] = j
+			i++
+			continue
+		}
+		if j > 0 {
+			j = lps[j-1]
+			continue
+		}
+		i++
+	}
+
+	matched := 0
+	for _, v := range text {
+		for matched > 0 && (matched == len(pattern) || v != pattern[matched]) {
+			matched = lps[matched-1]
+		}
+		if matched < len(pattern) && v == pattern[matched] {
+			matched++
+		}
+	}
+	return matched
 }
 
 func (sw *scrollbackWriter) appendLines(lines []HistoryLine) {

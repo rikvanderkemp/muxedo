@@ -2,6 +2,7 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -36,6 +37,11 @@ func (c CommandSpec) Validate(label string) error {
 
 // Build creates an *exec.Cmd from the command spec.
 func (c CommandSpec) Build(dir string, loginShell bool) (*exec.Cmd, error) {
+	return c.BuildContext(context.Background(), dir, loginShell)
+}
+
+// BuildContext creates an *exec.Cmd from the command spec bound to ctx.
+func (c CommandSpec) BuildContext(ctx context.Context, dir string, loginShell bool) (*exec.Cmd, error) {
 	if err := c.Validate("command"); err != nil {
 		return nil, err
 	}
@@ -46,9 +52,9 @@ func (c CommandSpec) Build(dir string, loginShell bool) (*exec.Cmd, error) {
 		if loginShell {
 			shellArgs = []string{"-lc", c.Shell}
 		}
-		cmd = exec.Command("sh", shellArgs...)
+		cmd = exec.CommandContext(ctx, "sh", shellArgs...)
 	} else {
-		cmd = exec.Command(c.Program, c.Args...)
+		cmd = exec.CommandContext(ctx, c.Program, c.Args...)
 	}
 
 	cmd.Dir = dir

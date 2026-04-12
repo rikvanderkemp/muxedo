@@ -2,10 +2,12 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +23,8 @@ type Panel struct {
 	Command CommandSpec
 	Kill    CommandSpec
 	Dir     string
+	// killTimeout bounds optional kill-command execution during stop/quit flows.
+	killTimeout time.Duration
 
 	ptmx       *os.File
 	cmd        *exec.Cmd
@@ -61,6 +65,8 @@ func (p *Panel) ExitError() error {
 
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
 
+const defaultRunCmdKillTimeout = 2 * time.Second
+
 // New creates panel from shell command strings.
 func New(name, cmd, cmdKill, dir string) *Panel {
 	return NewWithCommandSpec(name, CommandSpec{Shell: cmd}, CommandSpec{Shell: cmdKill}, dir)
@@ -73,6 +79,7 @@ func NewWithCommandSpec(name string, command, kill CommandSpec, dir string) *Pan
 		Command:      command,
 		Kill:         kill,
 		Dir:          dir,
+		killTimeout:  defaultRunCmdKillTimeout,
 		term:         vt10x.New(vt10x.WithSize(80, 24)),
 		displayDirty: true,
 	}
@@ -90,6 +97,7 @@ func NewWithScrollbackCommandSpec(name string, command, kill CommandSpec, dir, s
 		Command:      command,
 		Kill:         kill,
 		Dir:          dir,
+		killTimeout:  defaultRunCmdKillTimeout,
 		term:         vt10x.New(vt10x.WithSize(80, 24)),
 		sb:           newScrollbackWriter(scrollbackDir, name, maxBytes),
 		displayDirty: true,
@@ -276,11 +284,21 @@ func (p *Panel) RunCmdKill() error {
 	if p.Kill.IsZero() {
 		return nil
 	}
-	c, err := p.Kill.Build(p.Dir, true)
+	timeout := p.killTimeout
+	if timeout <= 0 {
+		timeout = defaultRunCmdKillTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	c, err := p.Kill.BuildContext(ctx, p.Dir, true)
 	if err != nil {
 		return fmt.Errorf("build kill command: %w", err)
 	}
 	if err := c.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("run kill command: timed out after %s: %w", timeout, ctx.Err())
+		}
 		return fmt.Errorf("run kill command: %w", err)
 	}
 	return nil
@@ -493,15 +511,17 @@ func (p *Panel) viewStateLocked() DisplayState {
 		cur.Y = rows - 1
 	}
 	var b strings.Builder
+	b.Grow(rows * (cols + 8))
+	rowGlyphs := make([]vt10x.Glyph, cols)
 
 	for y := 0; y < rows; y++ {
 		// Find the last non-space/non-zero cell in this row for trimming
 		lastNonEmpty := -1
-		for x := cols - 1; x >= 0; x-- {
+		for x := 0; x < cols; x++ {
 			glyph := p.term.Cell(x, y)
+			rowGlyphs[x] = glyph
 			if glyph.Char != 0 && glyph.Char != ' ' {
 				lastNonEmpty = x
-				break
 			}
 		}
 		if cursorVisible && y == cur.Y && cur.X > lastNonEmpty {
@@ -510,16 +530,9 @@ func (p *Panel) viewStateLocked() DisplayState {
 
 		var lastFG, lastBG vt10x.Color = vt10x.DefaultFG, vt10x.DefaultBG
 		for x := 0; x <= lastNonEmpty; x++ {
-			glyph := p.term.Cell(x, y)
+			glyph := rowGlyphs[x]
 			if glyph.FG != lastFG || glyph.BG != lastBG {
-				b.WriteString("\x1b[0")
-				if glyph.FG != vt10x.DefaultFG {
-					b.WriteString(fmt.Sprintf(";38;5;%d", glyph.FG))
-				}
-				if glyph.BG != vt10x.DefaultBG {
-					b.WriteString(fmt.Sprintf(";48;5;%d", glyph.BG))
-				}
-				b.WriteString("m")
+				writeSGR(&b, glyph.FG, glyph.BG)
 				lastFG, lastBG = glyph.FG, glyph.BG
 			}
 			char := glyph.Char
@@ -542,6 +555,19 @@ func (p *Panel) viewStateLocked() DisplayState {
 			Y:       cur.Y,
 		},
 	}
+}
+
+func writeSGR(b *strings.Builder, fg, bg vt10x.Color) {
+	b.WriteString("\x1b[0")
+	if fg != vt10x.DefaultFG {
+		b.WriteString(";38;5;")
+		b.WriteString(strconv.Itoa(int(fg)))
+	}
+	if bg != vt10x.DefaultBG {
+		b.WriteString(";48;5;")
+		b.WriteString(strconv.Itoa(int(bg)))
+	}
+	b.WriteByte('m')
 }
 
 func (p *Panel) viewSnapshot() string {
