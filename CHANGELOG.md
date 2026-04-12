@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/rikvanderkemp/muxedo/compare/v0.1.7...v0.1.8) (2026-04-12)
+
+
+### Features
+
+* **update:** add configurable startup update check ([#23](https://github.com/rikvanderkemp/muxedo/issues/23)) ([cde6a27](https://github.com/rikvanderkemp/muxedo/commit/cde6a27d6405e2b8dfa1f6a8b8c970112c5410fa))
+
 ## [0.1.7](https://github.com/rikvanderkemp/muxedo/compare/v0.1.6...v0.1.7) (2026-04-12)
 
 
