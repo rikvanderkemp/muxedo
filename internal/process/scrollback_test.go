@@ -176,6 +176,34 @@ func TestScrollbackWriterReset(t *testing.T) {
 	}
 }
 
+func TestScrollbackWriterSymlinkDoesNotEscapeRoot(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("SECRET_CONTENT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scrollDir := filepath.Join(dir, "scroll")
+	if err := os.Mkdir(scrollDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(scrollDir, "p.log")
+	if err := os.Symlink(filepath.Join("..", "secret.txt"), logPath); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil || string(raw) != "SECRET_CONTENT" {
+		t.Fatalf("plain ReadFile should follow symlink to secret (got err=%v raw=%q)", err, raw)
+	}
+
+	sw := newScrollbackWriter(scrollDir, "p", 0)
+	for _, line := range sw.Lines() {
+		if strings.Contains(line, "SECRET") {
+			t.Fatalf("scrollback escaped root via symlink: %q", line)
+		}
+	}
+}
+
 func TestScrollbackWriterLinesUseInMemorySessionCache(t *testing.T) {
 	dir := t.TempDir()
 	sw := newScrollbackWriter(dir, "cache", 0)

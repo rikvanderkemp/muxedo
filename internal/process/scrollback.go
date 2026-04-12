@@ -15,21 +15,37 @@ type HistoryLine struct {
 }
 
 type scrollbackWriter struct {
-	mu       sync.Mutex
-	path     string
-	maxBytes int64
-	prev     []HistoryLine
-	lines    []HistoryLine
-	loaded   bool
-	nextID   uint64
+	mu            sync.Mutex
+	scrollbackDir string
+	relFile       string // single path segment: sanitizeName(panel)+".log"
+	maxBytes      int64
+	prev          []HistoryLine
+	lines         []HistoryLine
+	loaded        bool
+	nextID        uint64
 }
 
 func newScrollbackWriter(dir, panelName string, maxBytes int64) *scrollbackWriter {
 	name := sanitizeName(panelName)
 	return &scrollbackWriter{
-		path:     filepath.Join(dir, name+".log"),
-		maxBytes: maxBytes,
+		scrollbackDir: dir,
+		relFile:       name + ".log",
+		maxBytes:      maxBytes,
 	}
+}
+
+// withRoot ensures scrollbackDir exists, opens an [os.Root] for it, and runs fn.
+// All file names are resolved under the root only (see [os.Root]). Caller must hold sw.mu.
+func (sw *scrollbackWriter) withRoot(fn func(*os.Root) error) error {
+	if err := os.MkdirAll(sw.scrollbackDir, 0o755); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(sw.scrollbackDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return fn(root)
 }
 
 func sanitizeName(name string) string {
@@ -74,12 +90,19 @@ func (sw *scrollbackWriter) Clear() {
 	sw.prev = nil
 	sw.lines = nil
 	sw.loaded = true
-	_ = os.Remove(sw.path)
+	// Best-effort: remove persisted file; ignore errors (e.g. missing file).
+	_ = sw.withRoot(func(root *os.Root) error {
+		err := root.Remove(sw.relFile)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	})
 }
 
-// Path returns the absolute path to the scrollback file.
+// Path returns the path to the scrollback file (under scrollbackDir).
 func (sw *scrollbackWriter) Path() string {
-	return sw.path
+	return filepath.Join(sw.scrollbackDir, sw.relFile)
 }
 
 // History merges persisted scrollback with the current screen. The screen
@@ -234,22 +257,23 @@ func (sw *scrollbackWriter) appendLines(lines []HistoryLine) {
 	}
 	sw.ensureLinesLoadedLocked()
 
-	if err := os.MkdirAll(filepath.Dir(sw.path), 0o755); err != nil {
+	// Best-effort scrollback persistence.
+	if err := sw.withRoot(func(root *os.Root) error {
+		f, err := root.OpenFile(sw.relFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		var buf bytes.Buffer
+		for _, l := range lines {
+			buf.WriteString(l.Text)
+			buf.WriteByte('\n')
+		}
+		_, err = f.Write(buf.Bytes())
+		return err
+	}); err != nil {
 		return
 	}
-
-	f, err := os.OpenFile(sw.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-
-	var buf bytes.Buffer
-	for _, l := range lines {
-		buf.WriteString(l.Text)
-		buf.WriteByte('\n')
-	}
-	_, _ = f.Write(buf.Bytes())
-	f.Close()
 
 	sw.lines = append(sw.lines, lines...)
 	sw.trimFile()
@@ -259,28 +283,40 @@ func (sw *scrollbackWriter) trimFile() {
 	if sw.maxBytes <= 0 {
 		return
 	}
-	info, err := os.Stat(sw.path)
-	if err != nil || info.Size() <= sw.maxBytes {
+	var trimmedForLines []byte
+	// Best-effort scrollback persistence.
+	err := sw.withRoot(func(root *os.Root) error {
+		info, err := root.Stat(sw.relFile)
+		if err != nil {
+			return err
+		}
+		if info.Size() <= sw.maxBytes {
+			return nil
+		}
+		data, err := root.ReadFile(sw.relFile)
+		if err != nil {
+			return err
+		}
+		cut := int64(len(data)) - sw.maxBytes
+		if cut <= 0 {
+			return nil
+		}
+		// Advance past the next newline so the file starts at a line boundary.
+		idx := bytes.IndexByte(data[cut:], '\n')
+		if idx < 0 {
+			return nil
+		}
+		trimmed := data[cut+int64(idx)+1:]
+		if err := root.WriteFile(sw.relFile, trimmed, 0o644); err != nil {
+			return err
+		}
+		trimmedForLines = trimmed
+		return nil
+	})
+	if err != nil || len(trimmedForLines) == 0 {
 		return
 	}
-
-	data, err := os.ReadFile(sw.path)
-	if err != nil {
-		return
-	}
-
-	cut := int64(len(data)) - sw.maxBytes
-	if cut <= 0 {
-		return
-	}
-	// Advance past the next newline so the file starts at a line boundary.
-	idx := bytes.IndexByte(data[cut:], '\n')
-	if idx < 0 {
-		return
-	}
-	trimmed := data[cut+int64(idx)+1:]
-	_ = os.WriteFile(sw.path, trimmed, 0o644)
-	sw.lines = sw.makeHistoryLines(parseScrollbackLines(trimmed))
+	sw.lines = sw.makeHistoryLines(parseScrollbackLines(trimmedForLines))
 	sw.loaded = true
 }
 
@@ -288,7 +324,12 @@ func (sw *scrollbackWriter) ensureLinesLoadedLocked() {
 	if sw.loaded {
 		return
 	}
-	data, err := os.ReadFile(sw.path)
+	var data []byte
+	err := sw.withRoot(func(root *os.Root) error {
+		var err error
+		data, err = root.ReadFile(sw.relFile)
+		return err
+	})
 	if err != nil {
 		sw.lines = nil
 		sw.loaded = true
