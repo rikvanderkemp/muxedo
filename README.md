@@ -58,6 +58,19 @@ When `-profile` is omitted, muxedo looks for `./.muxedo` in the working director
 
 ## Install
 
+### Homebrew (macOS and Linux)
+
+Requires [Homebrew](https://brew.sh).
+
+```bash
+brew tap rikvanderkemp/muxedo
+brew install muxedo
+```
+
+Prefer `brew upgrade muxedo` for updates. The binary can also self-update from GitHub releases; the tap formula may lag briefly until [homebrew-muxedo](https://github.com/rikvanderkemp/homebrew-muxedo) is bumped after each release.
+
+### Install script
+
 Install latest Linux/macOS release to `~/.local/bin/muxedo`:
 
 ```bash
@@ -77,7 +90,7 @@ The installer:
 - verifies SHA-256 before installing
 - prints a PATH snippet if the install directory is not already exported
 
-Manual fallback:
+### Manual fallback
 
 ```bash
 VERSION=v0.1.0
