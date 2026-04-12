@@ -18,6 +18,7 @@ import (
 
 const defaultAPIBaseURL = "https://api.github.com"
 
+// Updater checks for and applies muxedo releases from GitHub.
 type Updater struct {
 	client     *http.Client
 	apiBaseURL string
@@ -25,12 +26,14 @@ type Updater struct {
 	repo       string
 }
 
+// CheckResult describes available-version status for current binary.
 type CheckResult struct {
 	CurrentVersion  string
 	LatestVersion   string
 	UpdateAvailable bool
 }
 
+// ApplyResult describes successfully applied update version change.
 type ApplyResult struct {
 	PreviousVersion string
 	Version         string
@@ -46,10 +49,12 @@ type releaseAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+// NewUpdater creates updater using default HTTP client.
 func NewUpdater(owner, repo string) *Updater {
 	return NewUpdaterWithClient(owner, repo, http.DefaultClient)
 }
 
+// NewUpdaterWithClient creates updater using provided HTTP client.
 func NewUpdaterWithClient(owner, repo string, client *http.Client) *Updater {
 	if client == nil {
 		client = http.DefaultClient
@@ -62,6 +67,7 @@ func NewUpdaterWithClient(owner, repo string, client *http.Client) *Updater {
 	}
 }
 
+// Check fetches latest release metadata and compares it with currentVersion.
 func (u *Updater) Check(currentVersion string) (CheckResult, error) {
 	current, err := normalizeVersion(currentVersion)
 	if err != nil {
@@ -85,6 +91,7 @@ func (u *Updater) Check(currentVersion string) (CheckResult, error) {
 	}, nil
 }
 
+// Apply downloads latest matching release asset and replaces executablePath.
 func (u *Updater) Apply(currentVersion string, executablePath string) (ApplyResult, error) {
 	current, err := normalizeVersion(currentVersion)
 	if err != nil {

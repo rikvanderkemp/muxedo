@@ -53,8 +53,8 @@ func (c CommandSpec) Build(dir string, loginShell bool) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// MustBuild is a convenience for tests that expect a valid command spec.
-func (c CommandSpec) MustBuild(dir string, loginShell bool) *exec.Cmd {
+// mustBuild is a convenience for tests that expect a valid command spec.
+func (c CommandSpec) mustBuild(dir string, loginShell bool) *exec.Cmd {
 	cmd, err := c.Build(dir, loginShell)
 	if err != nil {
 		panic(err)
@@ -67,4 +67,5 @@ func (c CommandSpec) IsZero() bool {
 	return c.Program == "" && len(c.Args) == 0 && c.Shell == ""
 }
 
+// ErrEmptyCommand reports that a command spec was left unset.
 var ErrEmptyCommand = errors.New("empty command")

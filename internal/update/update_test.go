@@ -16,21 +16,45 @@ import (
 	"testing"
 )
 
-func TestCheckReportsUpdateAvailable(t *testing.T) {
-	updater := newTestUpdater(t, "v1.2.4", archiveFilename("v1.2.4", runtime.GOOS, runtime.GOARCH), []byte("binary"))
+func TestCheckReportsStatus(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentVersion string
+		latestVersion  string
+		wantAvailable  bool
+	}{
+		{
+			name:           "update available",
+			currentVersion: "v1.2.3",
+			latestVersion:  "v1.2.4",
+			wantAvailable:  true,
+		},
+		{
+			name:           "already up to date",
+			currentVersion: "v1.2.4",
+			latestVersion:  "v1.2.4",
+			wantAvailable:  false,
+		},
+	}
 
-	result, err := updater.Check("v1.2.3")
-	if err != nil {
-		t.Fatalf("Check() error = %v", err)
-	}
-	if !result.UpdateAvailable {
-		t.Fatal("Check() UpdateAvailable = false, want true")
-	}
-	if result.CurrentVersion != "v1.2.3" {
-		t.Fatalf("Check() CurrentVersion = %q", result.CurrentVersion)
-	}
-	if result.LatestVersion != "v1.2.4" {
-		t.Fatalf("Check() LatestVersion = %q", result.LatestVersion)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updater := newTestUpdater(t, tt.latestVersion, archiveFilename(tt.latestVersion, runtime.GOOS, runtime.GOARCH), []byte("binary"))
+
+			result, err := updater.Check(tt.currentVersion)
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if result.UpdateAvailable != tt.wantAvailable {
+				t.Fatalf("Check() UpdateAvailable = %v, want %v", result.UpdateAvailable, tt.wantAvailable)
+			}
+			if result.CurrentVersion != tt.currentVersion {
+				t.Fatalf("Check() CurrentVersion = %q", result.CurrentVersion)
+			}
+			if result.LatestVersion != tt.latestVersion {
+				t.Fatalf("Check() LatestVersion = %q", result.LatestVersion)
+			}
+		})
 	}
 }
 

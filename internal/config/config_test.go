@@ -120,17 +120,29 @@ check_updates_on_start = false
 	}
 }
 
-func TestExitMessageEnabledDefaultsTrueWhenUnset(t *testing.T) {
+func TestFeatureFlagsDefaultTrueWhenUnset(t *testing.T) {
 	cfg := Config{}
-	if !cfg.ExitMessageEnabled() {
-		t.Fatal("ExitMessageEnabled() = false, want true when unset")
-	}
-}
 
-func TestCheckUpdatesOnStartEnabledDefaultsTrueWhenUnset(t *testing.T) {
-	cfg := Config{}
-	if !cfg.CheckUpdatesOnStartEnabled() {
-		t.Fatal("CheckUpdatesOnStartEnabled() = false, want true when unset")
+	tests := []struct {
+		name string
+		got  func() bool
+	}{
+		{
+			name: "exit message",
+			got:  cfg.ExitMessageEnabled,
+		},
+		{
+			name: "startup update check",
+			got:  cfg.CheckUpdatesOnStartEnabled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.got() {
+				t.Fatalf("%s = false, want true when unset", tt.name)
+			}
+		})
 	}
 }
 

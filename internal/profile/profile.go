@@ -13,6 +13,7 @@ import (
 	"muxedo/internal/process"
 )
 
+// PanelSpec describes one configured panel command.
 type PanelSpec struct {
 	Name        string
 	Order       *int
@@ -21,24 +22,30 @@ type PanelSpec struct {
 	KillCommand process.CommandSpec
 }
 
+// StartupSpec describes command run before panel initialization.
 type StartupSpec struct {
 	WorkingDir string
 	Command    process.CommandSpec
 	Mode       StartupMode
 }
 
+// StartupMode controls whether startup command blocks later startup steps.
 type StartupMode string
 
 const (
+	// StartupModeAsync runs command without waiting for completion.
 	StartupModeAsync StartupMode = "async"
-	StartupModeSync  StartupMode = "sync"
+	// StartupModeSync runs command and waits for completion.
+	StartupModeSync StartupMode = "sync"
 )
 
+// ScrollbackConfig configures persisted panel scrollback storage.
 type ScrollbackConfig struct {
 	Dir      string
 	MaxBytes int64
 }
 
+// Profile is parsed muxedo profile configuration.
 type Profile struct {
 	Panels     []PanelSpec
 	Startup    []StartupSpec
@@ -80,6 +87,7 @@ type rawScrollback struct {
 	MaxBytes *int64 `toml:"max_bytes"`
 }
 
+// Load parses muxedo profile from path and resolves derived defaults.
 func Load(path string) (Profile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

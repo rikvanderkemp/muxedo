@@ -78,13 +78,24 @@ type panelSelection struct {
 	EndCol         int
 }
 
+const maxStartupLogLineBytes = 1 << 20 // 1 MiB
+const msgChanBufferSize = 256
+const msgSendTimeout = 100 * time.Millisecond
+
+func newMsgChan() chan tea.Msg {
+	return make(chan tea.Msg, msgChanBufferSize)
+}
+
 func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
 	return func() tea.Msg {
-		p.RunCmdKill()
+		status := fmt.Sprintf("exiting panel %s.... exiting completed...", p.Name)
+		if err := p.RunCmdKill(); err != nil {
+			status = fmt.Sprintf("exiting panel %s.... kill command failed: %v. exiting completed...", p.Name, err)
+		}
 		p.Stop()
 		return exitProgressMsg{
 			panelIdx: idx,
-			status:   fmt.Sprintf("exiting panel %s.... exiting completed...", p.Name),
+			status:   status,
 		}
 	}
 }
@@ -143,7 +154,7 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 		maximizedPanel:   -1,
 		startupCompleted: true,
 		scrollbackConfig: profile.ScrollbackConfig{},
-		msgChan:          make(chan tea.Msg),
+		msgChan:          newMsgChan(),
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -170,7 +181,7 @@ func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec
 		panelSpecs:       panels,
 		scrollbackConfig: sb,
 		theme:            theme,
-		msgChan:          make(chan tea.Msg),
+		msgChan:          newMsgChan(),
 		grid:             layout.Compute(len(panels)),
 		activePanel:      -1,
 		maximizedPanel:   -1,
@@ -193,6 +204,15 @@ func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec
 	}
 }
 
+func (m Model) emitMsg(msg tea.Msg) bool {
+	select {
+	case m.msgChan <- msg:
+		return true
+	case <-time.After(msgSendTimeout):
+		return false
+	}
+}
+
 func (m Model) Init() tea.Cmd {
 	if m.startupCompleted {
 		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen)
@@ -203,26 +223,26 @@ func (m Model) Init() tea.Cmd {
 func (m Model) startupSequence() tea.Msg {
 	go func() {
 		if len(m.startupSpecs) == 0 {
-			m.msgChan <- LogMsg("No startup commands specified.")
+			m.emitMsg(LogMsg("No startup commands specified."))
 		}
 
 		for i, spec := range m.startupSpecs {
 			m.runStartupItem(i, spec)
 		}
 
-		m.msgChan <- LogMsg("--- Startup commands completed. Initializing panels...")
+		m.emitMsg(LogMsg("--- Startup commands completed. Initializing panels..."))
 
 		panels := make([]*process.Panel, len(m.panelSpecs))
 		for i, spec := range m.panelSpecs {
 			p := process.NewWithScrollbackCommandSpec(spec.Name, spec.Command, spec.KillCommand, spec.WorkingDir, m.scrollbackConfig.Dir, m.scrollbackConfig.MaxBytes)
 			p.ResetScrollback()
 			if err := p.Start(); err != nil {
-				m.msgChan <- LogMsg(fmt.Sprintf("error: starting panel %s: %v", p.Name, err))
+				m.emitMsg(LogMsg(fmt.Sprintf("error: starting panel %s: %v", p.Name, err)))
 			}
 			panels[i] = p
 		}
 
-		m.msgChan <- StartupCompleteMsg{panels: panels}
+		m.emitMsg(StartupCompleteMsg{panels: panels})
 	}()
 	return nil
 }
@@ -245,17 +265,17 @@ func newStartupItems(specs []profile.StartupSpec) []startupItem {
 
 func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
 	label := describeCommand(spec.Command)
-	m.msgChan <- startupStatusMsg{idx: idx, status: startupStatusRunning}
-	m.msgChan <- LogMsg(fmt.Sprintf("--- Starting %s (%s)", label, spec.Mode))
+	m.emitMsg(startupStatusMsg{idx: idx, status: startupStatusRunning})
+	m.emitMsg(LogMsg(fmt.Sprintf("--- Starting %s (%s)", label, spec.Mode)))
 
 	cmd, stdout, stderr, err := buildStartupCommand(spec)
 	if err != nil {
-		m.msgChan <- startupStatusMsg{
+		m.emitMsg(startupStatusMsg{
 			idx:     idx,
 			status:  startupStatusError,
 			errText: err.Error(),
-		}
-		m.msgChan <- LogMsg(fmt.Sprintf("error: could not prepare %q: %v", label, err))
+		})
+		m.emitMsg(LogMsg(fmt.Sprintf("error: could not prepare %q: %v", label, err)))
 		return
 	}
 
@@ -264,12 +284,12 @@ func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
 	go m.streamStartupOutput(idx, stderr, done)
 
 	if err := cmd.Start(); err != nil {
-		m.msgChan <- startupStatusMsg{
+		m.emitMsg(startupStatusMsg{
 			idx:     idx,
 			status:  startupStatusError,
 			errText: fmt.Sprintf("start failed: %v", err),
-		}
-		m.msgChan <- LogMsg(fmt.Sprintf("error: could not start %q: %v", label, err))
+		})
+		m.emitMsg(LogMsg(fmt.Sprintf("error: could not start %q: %v", label, err)))
 		return
 	}
 
@@ -286,9 +306,9 @@ func (m Model) runStartupItem(idx int, spec profile.StartupSpec) {
 		if err != nil {
 			statusMsg.status = startupStatusError
 			statusMsg.exitCode, statusMsg.hasExitCode, statusMsg.errText = commandExitDetails(err)
-			m.msgChan <- LogMsg(fmt.Sprintf("error: command %q exited: %v", label, err))
+			m.emitMsg(LogMsg(fmt.Sprintf("error: command %q exited: %v", label, err)))
 		}
-		m.msgChan <- statusMsg
+		m.emitMsg(statusMsg)
 	}
 
 	if spec.Mode == profile.StartupModeSync {
@@ -321,11 +341,12 @@ func (m Model) streamStartupOutput(idx int, r io.Reader, done chan<- struct{}) {
 	}()
 
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxStartupLogLineBytes)
 	for scanner.Scan() {
-		m.msgChan <- startupLogMsg{idx: idx, line: scanner.Text()}
+		m.emitMsg(startupLogMsg{idx: idx, line: scanner.Text()})
 	}
 	if err := scanner.Err(); err != nil {
-		m.msgChan <- startupLogMsg{idx: idx, line: fmt.Sprintf("error: scanning output: %v", err)}
+		m.emitMsg(startupLogMsg{idx: idx, line: fmt.Sprintf("error: scanning output: %v", err)})
 	}
 }
 
@@ -486,7 +507,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if msg.Type == tea.KeyRunes && (string(msg.Runes) == "r" || string(msg.Runes) == "R") {
 					if err := m.restartPanel(p); err != nil {
-						go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: reloading panel %s: %v", p.Name, err)) }()
+						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
 					}
 					m.resizePanels()
 					return m, nil
@@ -535,7 +556,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if input := keyMsgToBytes(msg); len(input) > 0 {
-					_ = m.sendInput(p, input)
+					if err := m.sendInput(p, input); err != nil {
+						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: sending input to panel %s: %v", p.Name, err))
+					}
 				}
 				return m, nil
 			}
@@ -556,7 +579,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				case 'r', 'R':
 					if err := m.restartPanel(p); err != nil {
-						go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: reloading panel %s: %v", p.Name, err)) }()
+						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
 					}
 					m.resizePanels()
 					return m, nil
@@ -648,7 +671,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				now := m.panelRunning(p)
 				if m.prevPanelRunning[i] && !now {
 					if err := p.ExitError(); err != nil {
-						go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: panel %s exited: %v", p.Name, err)) }()
+						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: panel %s exited: %v", p.Name, err))
 					}
 					if i == m.activePanel {
 						m.maximizedPanel = -1
@@ -1509,14 +1532,14 @@ func (m *Model) copyCurrentSelection() {
 	}
 	text := m.currentSelectionText()
 	if text == "" {
-		go func() { m.msgChan <- LogMsg("warning: selection is empty") }()
+		m.messageBuffer = append(m.messageBuffer, "warning: selection is empty")
 		return
 	}
 	if err := m.copySelection(text); err != nil {
-		go func() { m.msgChan <- LogMsg(fmt.Sprintf("error: copying selection: %v", err)) }()
+		m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: copying selection: %v", err))
 		return
 	}
-	go func() { m.msgChan <- LogMsg("Copied panel selection to clipboard.") }()
+	m.messageBuffer = append(m.messageBuffer, "Copied panel selection to clipboard.")
 }
 
 func (m *Model) currentSelectionText() string {
