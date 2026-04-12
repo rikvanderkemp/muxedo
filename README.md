@@ -56,6 +56,42 @@ go run .
 
 When `-profile` is omitted, muxedo looks for `./.muxedo` in the working directory. If that file is not present, muxedo prints the missing-profile error together with the full command help.
 
+## Install
+
+Install latest Linux/macOS release to `~/.local/bin/muxedo`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rikvanderkemp/muxedo/main/scripts/install.sh | sh
+```
+
+Install specific release or custom dir:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rikvanderkemp/muxedo/main/scripts/install.sh | VERSION=v0.1.0 INSTALL_DIR="$HOME/bin" sh
+```
+
+The installer:
+
+- supports `linux` and `darwin` on `amd64` and `arm64`
+- downloads the matching GitHub release tarball and `checksums.txt`
+- verifies SHA-256 before installing
+- prints a PATH snippet if the install directory is not already exported
+
+Manual fallback:
+
+```bash
+VERSION=v0.1.0
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+esac
+curl -fsSLO "https://github.com/rikvanderkemp/muxedo/releases/download/${VERSION}/muxedo_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+tar -xzf "muxedo_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+install -m 755 muxedo "$HOME/.local/bin/muxedo"
+```
+
 ## Self-update
 
 Official release builds can check for newer GitHub releases and replace themselves in place:
