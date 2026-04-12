@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +86,40 @@ status_mode_normal_bg = "208"
 	}
 }
 
+func TestLoadParsesUIConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".config", "muxedo", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`
+[ui]
+show_exit_message = false
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.UI.ShowExitMessage == nil {
+		t.Fatal("UI.ShowExitMessage = nil, want parsed false")
+	}
+	if cfg.ExitMessageEnabled() {
+		t.Fatal("ExitMessageEnabled() = true, want false")
+	}
+}
+
+func TestExitMessageEnabledDefaultsTrueWhenUnset(t *testing.T) {
+	cfg := Config{}
+	if !cfg.ExitMessageEnabled() {
+		t.Fatal("ExitMessageEnabled() = false, want true when unset")
+	}
+}
+
 func TestWriteDefaultCreatesConfigAndDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -109,12 +145,15 @@ func TestWriteDefaultCreatesConfigAndDirectory(t *testing.T) {
 	if len(data) == 0 {
 		t.Fatal("WriteDefault() wrote empty file")
 	}
+	if string(data) == "" || !containsAll(string(data), "[ui]", "show_exit_message = true") {
+		t.Fatalf("WriteDefault() data = %q, want [ui] show_exit_message = true", string(data))
+	}
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg != Default() {
+	if !reflect.DeepEqual(cfg, Default()) {
 		t.Fatalf("Load() = %#v, want %#v", cfg, Default())
 	}
 }
@@ -165,7 +204,16 @@ func TestWriteDefaultOverwritesWithForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg != Default() {
+	if !reflect.DeepEqual(cfg, Default()) {
 		t.Fatalf("Load() = %#v, want %#v", cfg, Default())
 	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(s, part) {
+			return false
+		}
+	}
+	return true
 }

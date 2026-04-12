@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"muxedo/internal/config"
 	"muxedo/internal/update"
 )
 
@@ -156,6 +157,40 @@ func TestRunWithoutProfilePrintsUsage(t *testing.T) {
 	}
 }
 
+func TestPrintExitMessage(t *testing.T) {
+	var stdout bytes.Buffer
+
+	printExitMessage(&stdout)
+
+	got := stdout.String()
+	if !strings.Contains(got, "Thanks for using muxedo.") {
+		t.Fatalf("printExitMessage() = %q, want thank-you message", got)
+	}
+	if !strings.Contains(got, "https://buymeacoffee.com/rikvanderkemp") {
+		t.Fatalf("printExitMessage() = %q, want support link", got)
+	}
+	if !strings.Contains(got, "[ui] show_exit_message = false") {
+		t.Fatalf("printExitMessage() = %q, want disable hint", got)
+	}
+}
+
+func TestPrintExitMessageDisabledConfigSkipsOutput(t *testing.T) {
+	var stdout bytes.Buffer
+
+	cfg := config.Config{
+		UI: config.UIConfig{
+			ShowExitMessage: boolPtr(false),
+		},
+	}
+	if cfg.ExitMessageEnabled() {
+		printExitMessage(&stdout)
+	}
+
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty when exit message disabled", stdout.String())
+	}
+}
+
 type runResult struct {
 	stdout   string
 	stderr   string
@@ -215,4 +250,8 @@ func withWorkingDirValue[T any](dir string, fn func() T) T {
 	}()
 
 	return fn()
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

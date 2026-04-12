@@ -260,3 +260,9 @@ status_mode_insert_bg = "#00af00"
 status_hint_fg = "#d0d0d0"
 status_hint_bg = "#444444"
 ```
+
+## Support
+
+If muxedo saves you time, you can support development here:
+
+<a href="https://www.buymeacoffee.com/rikvanderkemp" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
