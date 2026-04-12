@@ -42,6 +42,56 @@ jobs:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      - name: Sync release PR body
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_JSON: ${{ steps.release.outputs.pr }}
+          PRS_JSON: ${{ steps.release.outputs.prs }}
+        run: |
+          if [[ -n "$PR_JSON" && "$PR_JSON" != "null" ]]; then
+            pr_json="$PR_JSON"
+          else
+            pr_json="$(jq -c '.[0] // empty' <<<"$PRS_JSON")"
+          fi
+
+          pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
+          head_branch="$(jq -r '.headBranchName // .headRefName // empty' <<<"$pr_json")"
+
+          if [[ -z "$pr_number" || -z "$head_branch" ]]; then
+            echo "release-please did not return a release PR number/head branch"
+            exit 1
+          fi
+
+          git fetch origin "$head_branch:refs/remotes/origin/$head_branch"
+
+          section="$(git show "origin/$head_branch:CHANGELOG.md" | awk '
+            /^## \[/ {
+              if (capture) exit
+              capture=1
+            }
+            capture { print }
+          ')"
+
+          if [[ -z "$section" ]]; then
+            echo "failed to extract latest release notes from CHANGELOG.md"
+            exit 1
+          fi
+
+          body_file="$(mktemp)"
+          {
+            printf ':robot: I have created a release *beep* *boop*\n'
+            printf '%s\n' '---'
+            printf '\n'
+            printf '\n'
+            printf '%s\n' "$section"
+            printf '\n'
+            printf '%s\n' '---'
+            printf '%s\n' 'This PR was generated with [Release Please](https://github.com/googleapis/release-please). See [documentation](https://github.com/googleapis/release-please#release-please).'
+          } >"$body_file"
+
+          gh pr edit "$pr_number" --body-file "$body_file"
+
       - name: Guard major releases
         id: guard
         env:
