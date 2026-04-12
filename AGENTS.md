@@ -28,3 +28,7 @@ Examples:
 - `feat(ui): add panel maximize toggle`
 - `fix(process): stabilize scrollback IDs`
 - `docs(readme): explain release commit conventions`
+
+## License
+
+This project is released under the MIT License. By contributing, you agree that your contributions will be licensed under the same MIT License (inbound = outbound).

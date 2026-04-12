@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Profiling: from repo root,
 //
 //	go test -run=^$ -bench=. -benchmem -benchtime=2s \
