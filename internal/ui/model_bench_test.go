@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/process"
 )
 
 func BenchmarkSelectionLinesForPanelLive(b *testing.B) {

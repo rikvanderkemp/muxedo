@@ -118,7 +118,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
-	model := ui.NewModelWithSpecs(cfg.Startup, cfg.Panels, cfg.Scrollback, ui.ResolveTheme(appConfig.Theme))
+	model := ui.NewModelWithSpecs(cfg.Title, cfg.Startup, cfg.Panels, cfg.Scrollback, ui.ResolveTheme(appConfig.Theme))
 	if err := runProgram(model); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1

@@ -8,6 +8,48 @@ import (
 	"testing"
 )
 
+func TestLoadProfileSetsConfiguredTitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+title = "My Project"
+[panel.api]
+workingdir = "."
+program = "go"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Title != "My Project" {
+		t.Fatalf("Title = %q, want My Project", got.Title)
+	}
+}
+
+func TestLoadProfileDefaultsTitleToRandomName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if err := os.WriteFile(path, []byte(`
+[panel.api]
+workingdir = "."
+program = "go"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Title == "" {
+		t.Fatal("Title is empty, want random name")
+	}
+	if !strings.Contains(got.Title, "-") {
+		t.Fatalf("Title %q does not look like adjective-animal", got.Title)
+	}
+}
+
 func TestLoadProfileParsesPanelsAndDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profile.toml")
 	if err := os.WriteFile(path, []byte(`
