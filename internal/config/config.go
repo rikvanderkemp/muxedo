@@ -17,7 +17,8 @@ type Config struct {
 }
 
 type UIConfig struct {
-	ShowExitMessage *bool `toml:"show_exit_message"`
+	ShowExitMessage     *bool `toml:"show_exit_message"`
+	CheckUpdatesOnStart *bool `toml:"check_updates_on_start"`
 }
 
 type ThemeConfig struct {
@@ -55,7 +56,8 @@ type ThemeConfig struct {
 func Default() Config {
 	return Config{
 		UI: UIConfig{
-			ShowExitMessage: boolPtr(true),
+			ShowExitMessage:     boolPtr(true),
+			CheckUpdatesOnStart: boolPtr(true),
 		},
 		Theme: DefaultTheme(),
 	}
@@ -66,6 +68,13 @@ func (c Config) ExitMessageEnabled() bool {
 		return true
 	}
 	return *c.UI.ShowExitMessage
+}
+
+func (c Config) CheckUpdatesOnStartEnabled() bool {
+	if c.UI.CheckUpdatesOnStart == nil {
+		return true
+	}
+	return *c.UI.CheckUpdatesOnStart
 }
 
 func DefaultTheme() ThemeConfig {

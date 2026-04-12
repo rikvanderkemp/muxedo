@@ -103,6 +103,7 @@ Official release builds can check for newer GitHub releases and replace themselv
 
 - `update check` prints current and latest release versions, then reports whether an update is available.
 - `update apply` downloads the matching release tarball for the current OS/architecture, verifies it against the published `checksums.txt`, replaces the current executable, then exits. Restart muxedo after it succeeds.
+- Normal `muxedo` startup also checks for updates by default. In interactive terminals it prompts before startup continues; if you accept, muxedo updates itself and restarts into the new binary automatically.
 - Self-update is unavailable for `dev` builds.
 - Self-update only supports standalone binaries installed from muxedo GitHub release tarballs. Package-manager installs may not be writable or may be managed externally.
 - If the current executable directory is not writable, update apply fails without modifying the existing binary.
@@ -225,6 +226,17 @@ Muxedo also looks for an optional app-level config at `~/.config/muxedo/config.t
 If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the launch profile from `-profile` or the implicit `./.muxedo` fallback.
 
 To generate a complete config file with every app-level option set to its default value, run `./muxedo -dump-config`. This creates the parent directory if needed and refuses to overwrite an existing file unless you also pass `-force`.
+
+Use the `[ui]` section for app-level behavior toggles:
+
+```toml
+[ui]
+show_exit_message = true
+check_updates_on_start = true
+```
+
+- `show_exit_message` controls the support message printed after muxedo exits.
+- `check_updates_on_start` controls the default-on startup self-update check. In non-interactive sessions, muxedo skips the prompt and starts normally.
 
 You can also add a `[theme]` section to override the UI colors. Hex values are the intended format for themers, and muxedo will let the terminal renderer degrade them automatically on lower-color terminals. ANSI numeric strings still work too.
 
