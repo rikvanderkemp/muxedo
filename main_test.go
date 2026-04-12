@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"muxedo/internal/config"
 	"muxedo/internal/update"
@@ -112,6 +115,265 @@ func TestRunUpdateApplyPrintsRestartMessage(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "restart muxedo") {
 		t.Fatalf("run(update apply) stdout = %q", stdout.String())
+	}
+}
+
+func TestRunStartupSkipsUpdateWhenConfigDisabled(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	tempDir := t.TempDir()
+	writeProfile(t, tempDir)
+	writeConfig(t, tempDir, "[ui]\ncheck_updates_on_start = false\n")
+
+	called := false
+	newUpdater = func() updaterAPI {
+		called = true
+		return updaterStub{}
+	}
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("run(nil) exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if called {
+		t.Fatal("newUpdater() called, want skipped when config disables startup checks")
+	}
+}
+
+func TestRunStartupContinuesWhenNoUpdateAvailable(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	tempDir := t.TempDir()
+	writeProfile(t, tempDir)
+	writeConfig(t, tempDir, "")
+
+	checkCalls := 0
+	newUpdater = func() updaterAPI {
+		return updaterStub{
+			check: func(currentVersion string) (update.CheckResult, error) {
+				checkCalls++
+				return update.CheckResult{
+					CurrentVersion:  currentVersion,
+					LatestVersion:   currentVersion,
+					UpdateAvailable: false,
+				}, nil
+			},
+		}
+	}
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("run(nil) exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if checkCalls != 1 {
+		t.Fatalf("checkCalls = %d, want 1", checkCalls)
+	}
+}
+
+func TestRunStartupPromptsAndSkipsWhenUserDeclines(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	tempDir := t.TempDir()
+	writeProfile(t, tempDir)
+	writeConfig(t, tempDir, "")
+
+	promptInput = strings.NewReader("n\n")
+	var prompt bytes.Buffer
+	promptOutput = &prompt
+
+	checkCalls := 0
+	applyCalls := 0
+	newUpdater = func() updaterAPI {
+		return updaterStub{
+			check: func(currentVersion string) (update.CheckResult, error) {
+				checkCalls++
+				return update.CheckResult{
+					CurrentVersion:  currentVersion,
+					LatestVersion:   "v9.9.9",
+					UpdateAvailable: true,
+				}, nil
+			},
+			apply: func(string, string) (update.ApplyResult, error) {
+				applyCalls++
+				return update.ApplyResult{}, nil
+			},
+		}
+	}
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("run(nil) exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if checkCalls != 1 {
+		t.Fatalf("checkCalls = %d, want 1", checkCalls)
+	}
+	if applyCalls != 0 {
+		t.Fatalf("applyCalls = %d, want 0", applyCalls)
+	}
+	if !strings.Contains(prompt.String(), "Apply update now? [Y/n]") {
+		t.Fatalf("prompt = %q, want update confirmation", prompt.String())
+	}
+}
+
+func TestRunStartupAppliesUpdateAndExecsSelf(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	tempDir := t.TempDir()
+	writeProfile(t, tempDir)
+	writeConfig(t, tempDir, "")
+
+	promptInput = strings.NewReader("y\n")
+	promptOutput = io.Discard
+
+	applyCalls := 0
+	execCalls := 0
+	newUpdater = func() updaterAPI {
+		return updaterStub{
+			check: func(currentVersion string) (update.CheckResult, error) {
+				return update.CheckResult{
+					CurrentVersion:  currentVersion,
+					LatestVersion:   "v9.9.9",
+					UpdateAvailable: true,
+				}, nil
+			},
+			apply: func(currentVersion string, executablePath string) (update.ApplyResult, error) {
+				applyCalls++
+				if executablePath == "" {
+					t.Fatal("Apply() executablePath empty")
+				}
+				return update.ApplyResult{
+					PreviousVersion: currentVersion,
+					Version:         "v9.9.9",
+				}, nil
+			},
+		}
+	}
+	execSelf = func(executablePath string, args []string) error {
+		execCalls++
+		if executablePath == "" {
+			t.Fatal("execSelf() executablePath empty")
+		}
+		if len(args) != 0 {
+			t.Fatalf("execSelf() args = %#v, want nil", args)
+		}
+		return nil
+	}
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("run(nil) exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if applyCalls != 1 {
+		t.Fatalf("applyCalls = %d, want 1", applyCalls)
+	}
+	if execCalls != 1 {
+		t.Fatalf("execCalls = %d, want 1", execCalls)
+	}
+}
+
+func TestRunStartupWarnsAndContinuesOnCheckError(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	tempDir := t.TempDir()
+	writeProfile(t, tempDir)
+	writeConfig(t, tempDir, "")
+
+	newUpdater = func() updaterAPI {
+		return updaterStub{
+			check: func(string) (update.CheckResult, error) {
+				return update.CheckResult{}, os.ErrPermission
+			},
+		}
+	}
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("run(nil) exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if !strings.Contains(result.stderr, "warning: startup update check failed") {
+		t.Fatalf("stderr = %q, want startup update warning", result.stderr)
+	}
+}
+
+func TestRunStartupSkipsPromptWhenNonInteractive(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	tempDir := t.TempDir()
+	writeProfile(t, tempDir)
+	writeConfig(t, tempDir, "")
+
+	isInteractiveTTY = func(io.Reader, io.Writer) bool { return false }
+	promptOutput = io.Discard
+
+	promptInput = strings.NewReader("y\n")
+	applyCalls := 0
+	newUpdater = func() updaterAPI {
+		return updaterStub{
+			check: func(currentVersion string) (update.CheckResult, error) {
+				return update.CheckResult{
+					CurrentVersion:  currentVersion,
+					LatestVersion:   "v9.9.9",
+					UpdateAvailable: true,
+				}, nil
+			},
+			apply: func(string, string) (update.ApplyResult, error) {
+				applyCalls++
+				return update.ApplyResult{}, nil
+			},
+		}
+	}
+
+	result := withWorkingDirValue(tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("run(nil) exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if applyCalls != 0 {
+		t.Fatalf("applyCalls = %d, want 0", applyCalls)
+	}
+	if !strings.Contains(result.stderr, "skipping prompt in non-interactive session") {
+		t.Fatalf("stderr = %q, want non-interactive warning", result.stderr)
 	}
 }
 
@@ -254,4 +516,56 @@ func withWorkingDirValue[T any](dir string, fn func() T) T {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func stubStartupEnv(t *testing.T) func() {
+	t.Helper()
+
+	originalVersion := version
+	originalNewUpdater := newUpdater
+	originalNewStartupUpdater := newStartupUpdater
+	originalRunProgram := runProgram
+	originalPromptInput := promptInput
+	originalPromptOutput := promptOutput
+	originalTTY := isInteractiveTTY
+	originalExecSelf := execSelf
+
+	version = "v1.2.3"
+	newStartupUpdater = func() updaterAPI { return newUpdater() }
+	runProgram = func(tea.Model) error { return nil }
+	promptInput = strings.NewReader("\n")
+	promptOutput = io.Discard
+	isInteractiveTTY = func(io.Reader, io.Writer) bool { return true }
+	execSelf = func(string, []string) error { return nil }
+
+	return func() {
+		version = originalVersion
+		newUpdater = originalNewUpdater
+		newStartupUpdater = originalNewStartupUpdater
+		runProgram = originalRunProgram
+		promptInput = originalPromptInput
+		promptOutput = originalPromptOutput
+		isInteractiveTTY = originalTTY
+		execSelf = originalExecSelf
+	}
+}
+
+func writeProfile(t *testing.T, dir string) {
+	t.Helper()
+	data := "workingdir = \".\"\n\n[panel.test]\nshell = \"printf ok\\n\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".muxedo"), []byte(data), 0o644); err != nil {
+		t.Fatalf("WriteFile(profile) error = %v", err)
+	}
+}
+
+func writeConfig(t *testing.T, home string, body string) {
+	t.Helper()
+	path := filepath.Join(home, ".config", "muxedo", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(config) error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	t.Setenv("HOME", home)
 }

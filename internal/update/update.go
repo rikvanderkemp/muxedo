@@ -47,8 +47,15 @@ type releaseAsset struct {
 }
 
 func NewUpdater(owner, repo string) *Updater {
+	return NewUpdaterWithClient(owner, repo, http.DefaultClient)
+}
+
+func NewUpdaterWithClient(owner, repo string, client *http.Client) *Updater {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	return &Updater{
-		client:     http.DefaultClient,
+		client:     client,
 		apiBaseURL: defaultAPIBaseURL,
 		owner:      owner,
 		repo:       repo,
