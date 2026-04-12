@@ -273,6 +273,10 @@ status_hint_fg = "#d0d0d0"
 status_hint_bg = "#444444"
 ```
 
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
 ## Support
 
 If muxedo saves you time, you can support development here:
