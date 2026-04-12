@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -24,6 +29,18 @@ var (
 	newUpdater = func() updaterAPI {
 		return update.NewUpdater("rikvanderkemp", "muxedo")
 	}
+	newStartupUpdater = func() updaterAPI {
+		return update.NewUpdaterWithClient("rikvanderkemp", "muxedo", &http.Client{Timeout: 2 * time.Second})
+	}
+	runProgram = func(model tea.Model) error {
+		prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		_, err := prog.Run()
+		return err
+	}
+	promptInput      io.Reader = os.Stdin
+	promptOutput     io.Writer = os.Stdout
+	isInteractiveTTY           = defaultIsInteractiveTTY
+	execSelf                   = defaultExecSelf
 )
 
 type updaterAPI interface {
@@ -83,6 +100,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
+	if err := maybeApplyStartupUpdate(appConfig, args, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "warning: %v\n", err)
+	}
+
 	resolvedProfilePath, err := resolveProfilePath(*profilePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -97,9 +118,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	model := ui.NewModelWithSpecs(cfg.Startup, cfg.Panels, cfg.Scrollback, ui.ResolveTheme(appConfig.Theme))
-	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-
-	if _, err := prog.Run(); err != nil {
+	if err := runProgram(model); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
@@ -152,6 +171,104 @@ func runUpdate(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown update subcommand %q (want check or apply)", args[0])
 	}
+}
+
+func maybeApplyStartupUpdate(appConfig config.Config, args []string, stdout io.Writer, stderr io.Writer) error {
+	if !appConfig.CheckUpdatesOnStartEnabled() || version == "dev" {
+		return nil
+	}
+
+	result, err := newStartupUpdater().Check(version)
+	if err != nil {
+		return fmt.Errorf("startup update check failed: %w", err)
+	}
+	if !result.UpdateAvailable {
+		return nil
+	}
+
+	if !isInteractiveTTY(promptInput, promptOutput) {
+		fmt.Fprintf(stderr, "warning: update available (%s -> %s); skipping prompt in non-interactive session\n", result.CurrentVersion, result.LatestVersion)
+		return nil
+	}
+
+	apply, err := promptForStartupUpdate(result, promptInput, promptOutput)
+	if err != nil {
+		return fmt.Errorf("startup update prompt failed: %w", err)
+	}
+	if !apply {
+		return nil
+	}
+
+	executablePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("startup update failed locating current executable: %w", err)
+	}
+
+	if _, err := newUpdater().Apply(version, executablePath); err != nil {
+		return fmt.Errorf("startup update apply failed: %w", err)
+	}
+
+	if err := execSelf(executablePath, args); err != nil {
+		return fmt.Errorf("startup update applied but restart failed: %w", err)
+	}
+	return nil
+}
+
+func promptForStartupUpdate(result update.CheckResult, input io.Reader, output io.Writer) (bool, error) {
+	reader := bufio.NewReader(input)
+	fmt.Fprintf(output, "update available: %s -> %s\n", result.CurrentVersion, result.LatestVersion)
+	for {
+		fmt.Fprint(output, "Apply update now? [Y/n] ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				answer := strings.TrimSpace(line)
+				if answer == "" {
+					return true, nil
+				}
+				switch strings.ToLower(answer) {
+				case "y", "yes":
+					return true, nil
+				case "n", "no":
+					return false, nil
+				default:
+					return false, io.ErrUnexpectedEOF
+				}
+			}
+			return false, err
+		}
+
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		}
+	}
+}
+
+func defaultIsInteractiveTTY(input io.Reader, output io.Writer) bool {
+	inFile, ok := input.(*os.File)
+	if !ok {
+		return false
+	}
+	outFile, ok := output.(*os.File)
+	if !ok {
+		return false
+	}
+	return isCharDevice(inFile) && isCharDevice(outFile)
+}
+
+func isCharDevice(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func defaultExecSelf(executablePath string, args []string) error {
+	return syscall.Exec(executablePath, append([]string{executablePath}, args...), os.Environ())
 }
 
 func resolveProfilePath(flagValue string) (string, error) {

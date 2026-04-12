@@ -97,6 +97,7 @@ func TestLoadParsesUIConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 [ui]
 show_exit_message = false
+check_updates_on_start = false
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -111,12 +112,25 @@ show_exit_message = false
 	if cfg.ExitMessageEnabled() {
 		t.Fatal("ExitMessageEnabled() = true, want false")
 	}
+	if cfg.UI.CheckUpdatesOnStart == nil {
+		t.Fatal("UI.CheckUpdatesOnStart = nil, want parsed false")
+	}
+	if cfg.CheckUpdatesOnStartEnabled() {
+		t.Fatal("CheckUpdatesOnStartEnabled() = true, want false")
+	}
 }
 
 func TestExitMessageEnabledDefaultsTrueWhenUnset(t *testing.T) {
 	cfg := Config{}
 	if !cfg.ExitMessageEnabled() {
 		t.Fatal("ExitMessageEnabled() = false, want true when unset")
+	}
+}
+
+func TestCheckUpdatesOnStartEnabledDefaultsTrueWhenUnset(t *testing.T) {
+	cfg := Config{}
+	if !cfg.CheckUpdatesOnStartEnabled() {
+		t.Fatal("CheckUpdatesOnStartEnabled() = false, want true when unset")
 	}
 }
 
@@ -145,8 +159,8 @@ func TestWriteDefaultCreatesConfigAndDirectory(t *testing.T) {
 	if len(data) == 0 {
 		t.Fatal("WriteDefault() wrote empty file")
 	}
-	if string(data) == "" || !containsAll(string(data), "[ui]", "show_exit_message = true") {
-		t.Fatalf("WriteDefault() data = %q, want [ui] show_exit_message = true", string(data))
+	if string(data) == "" || !containsAll(string(data), "[ui]", "show_exit_message = true", "check_updates_on_start = true") {
+		t.Fatalf("WriteDefault() data = %q, want default ui config", string(data))
 	}
 
 	cfg, err := Load()
