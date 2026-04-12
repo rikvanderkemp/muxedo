@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/rikvanderkemp/muxedo/compare/v0.1.5...v0.1.6) (2026-04-12)
+
+
+### Features
+
+* **ui:** add panel select mode ([#16](https://github.com/rikvanderkemp/muxedo/issues/16)) ([5cacd2d](https://github.com/rikvanderkemp/muxedo/commit/5cacd2d344c7cc1ebf91e0a86d6af1d426ce0251))
+
 ## [0.1.5](https://github.com/rikvanderkemp/muxedo/compare/v0.1.4...v0.1.5) (2026-04-11)
 
 
