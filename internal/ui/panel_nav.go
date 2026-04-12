@@ -4,7 +4,7 @@ package ui
 import (
 	"fmt"
 
-	"muxedo/internal/layout"
+	"github.com/rikvanderkemp/muxedo/internal/layout"
 )
 
 // panelIndexFromDigit maps '1'..'9' to panel indices 0..8. Returns ok false if out of range.

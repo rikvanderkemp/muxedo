@@ -4,7 +4,7 @@ package ui
 import (
 	"testing"
 
-	"muxedo/internal/config"
+	"github.com/rikvanderkemp/muxedo/internal/config"
 )
 
 func TestResolveThemeDefaults(t *testing.T) {

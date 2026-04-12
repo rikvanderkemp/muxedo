@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
-	"muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/process"
 )
 
 func TestPadOrTruncateASCII(t *testing.T) {

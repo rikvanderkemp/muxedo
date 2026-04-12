@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/process"
 )
 
 type statusSegment struct {

@@ -13,8 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"muxedo/internal/process"
-	"muxedo/internal/profile"
+	"github.com/rikvanderkemp/muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/profile"
 )
 
 type quitOnStartupCompleteModel struct {

@@ -1,4 +1,4 @@
-module muxedo
+module github.com/rikvanderkemp/muxedo
 
 go 1.25.0
 

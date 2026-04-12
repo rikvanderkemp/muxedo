@@ -16,10 +16,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"muxedo/internal/config"
-	"muxedo/internal/profile"
-	"muxedo/internal/ui"
-	"muxedo/internal/update"
+	"github.com/rikvanderkemp/muxedo/internal/config"
+	"github.com/rikvanderkemp/muxedo/internal/profile"
+	"github.com/rikvanderkemp/muxedo/internal/ui"
+	"github.com/rikvanderkemp/muxedo/internal/update"
 )
 
 var (
