@@ -2,16 +2,67 @@
 package ui
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"muxedo/internal/process"
 	"muxedo/internal/profile"
 )
+
+type quitOnStartupCompleteModel struct {
+	inner Model
+}
+
+func (m quitOnStartupCompleteModel) Init() tea.Cmd {
+	return m.inner.Init()
+}
+
+func (m quitOnStartupCompleteModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.inner.Update(msg)
+	m.inner = next.(Model)
+	if _, ok := msg.(StartupCompleteMsg); ok && m.inner.startupCompleted {
+		return m, tea.Quit
+	}
+	return m, cmd
+}
+
+func (m quitOnStartupCompleteModel) View() string {
+	return m.inner.View()
+}
+
+func runProgramForTest(t *testing.T, model tea.Model, timeout time.Duration, send func(*tea.Program)) (tea.Model, error) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var out bytes.Buffer
+	prog := tea.NewProgram(
+		model,
+		tea.WithContext(ctx),
+		tea.WithInput(nil),
+		tea.WithOutput(&out),
+		tea.WithoutRenderer(),
+		tea.WithoutSignals(),
+	)
+	if send != nil {
+		go send(prog)
+	}
+
+	final, err := prog.Run()
+	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
+		t.Fatalf("program timed out after %v", timeout)
+	}
+	return final, err
+}
 
 func historyLinesOf(lines ...string) []process.HistoryLine {
 	out := make([]process.HistoryLine, len(lines))
@@ -442,6 +493,38 @@ func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	}
 }
 
+func TestSelectionLinesForPanelLiveStripsANSIWithoutChangingWindow(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 40
+	model.height = 8
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.displayForView = func(*process.Panel) process.DisplayState {
+		return process.DisplayState{
+			Output: "\x1b[31mred\x1b[0m\nplain\n",
+		}
+	}
+
+	lines, plain := model.selectionLinesForPanel(0, 3)
+	if len(lines) != 3 || len(plain) != 3 {
+		t.Fatalf("unexpected lengths: lines=%d plain=%d", len(lines), len(plain))
+	}
+	if !strings.Contains(lines[0], "\x1b[31mred\x1b[0m") {
+		t.Fatalf("styled line lost ANSI content: %q", lines[0])
+	}
+	if plain[0] != padOrTruncate("red", model.activePaneContentWidth()) {
+		t.Fatalf("plain line = %q, want stripped red", plain[0])
+	}
+	if ansi.StringWidth(lines[0]) != ansi.StringWidth(plain[0]) {
+		t.Fatalf("width mismatch styled=%d plain=%d", ansi.StringWidth(lines[0]), ansi.StringWidth(plain[0]))
+	}
+	if strings.TrimRight(ansi.Strip(lines[1]), " ") != strings.TrimRight(plain[1], " ") {
+		t.Fatalf("row alignment mismatch: styled=%q plain=%q", lines[1], plain[1])
+	}
+}
+
 func TestKillPanelCmdIncludesKillCommandFailure(t *testing.T) {
 	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "true"}, process.CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
 
@@ -661,6 +744,85 @@ func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
 	}
 }
 
+func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
+	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model.msgChan = make(chan tea.Msg, 1)
+	model.msgChan <- LogMsg("buffer full")
+
+	cmd := model.startupSequence()
+	if cmd != nil {
+		t.Fatalf("startupSequence() = %v, want nil", cmd)
+	}
+
+	time.Sleep(msgSendTimeout + 20*time.Millisecond)
+
+	msg := <-model.msgChan
+	if got, ok := msg.(LogMsg); !ok || got != LogMsg("buffer full") {
+		t.Fatalf("first msg = %#v, want preserved buffered log", msg)
+	}
+
+	select {
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for follow-up startup messages")
+	default:
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case msg = <-model.msgChan:
+			if _, ok := msg.(StartupCompleteMsg); ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for StartupCompleteMsg after draining full queue")
+		}
+	}
+}
+
+func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T) {
+	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model.msgChan = make(chan tea.Msg, 1)
+	model.msgChan <- LogMsg("buffer full")
+
+	cmd := model.startupSequence()
+	if cmd != nil {
+		t.Fatalf("startupSequence() = %v, want nil", cmd)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for !model.startupCompleted {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for startup completion through wait loop")
+		default:
+		}
+
+		msg := model.waitForMsg()
+		next, _ := model.Update(msg)
+		model = next.(Model)
+	}
+}
+
+func TestStartupSequenceCompletesInBubbleTeaProgramWhenQueueStartsFull(t *testing.T) {
+	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model.msgChan = make(chan tea.Msg, 1)
+	model.msgChan <- LogMsg("buffer full")
+
+	final, err := runProgramForTest(t, quitOnStartupCompleteModel{inner: model}, 2*time.Second, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got := final.(quitOnStartupCompleteModel).inner
+	if !got.startupCompleted {
+		t.Fatal("expected startupCompleted true after real program loop")
+	}
+	if got.showBuffer {
+		t.Fatal("expected startup buffer hidden after completion")
+	}
+}
+
 func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
 	model := NewModelWithSpecs([]profile.StartupSpec{
 		{
@@ -700,6 +862,81 @@ func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timeout waiting for async startup messages: running=%v log=%v done=%v", sawRunning, sawLog, sawDone)
 		}
+	}
+}
+
+func TestGlobalQuitWithHungKillCommandReturnsPromptly(t *testing.T) {
+	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{Shell: "sleep 10"}, ".")
+	if err := panel.Start(); err != nil {
+		t.Fatalf("start panel: %v", err)
+	}
+	t.Cleanup(func() {
+		panel.Stop()
+	})
+
+	model := NewModel([]*process.Panel{panel})
+	model.activePanel = -1
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	model = next.(Model)
+	if !model.exiting {
+		t.Fatal("expected exiting state after q")
+	}
+	if cmd == nil {
+		t.Fatal("expected quit cmd")
+	}
+
+	start := time.Now()
+	msg := cmd()
+	elapsed := time.Since(start)
+	if elapsed > 3*time.Second {
+		t.Fatalf("quit cmd took too long: %v", elapsed)
+	}
+
+	exitMsg, ok := msg.(exitProgressMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v, want exitProgressMsg", msg)
+	}
+	if !strings.Contains(exitMsg.status, "kill command failed") {
+		t.Fatalf("status = %q, want kill command failure", exitMsg.status)
+	}
+}
+
+func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
+	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{Shell: "sleep 10"}, ".")
+	if err := panel.Start(); err != nil {
+		t.Fatalf("start panel: %v", err)
+	}
+	t.Cleanup(func() {
+		panel.Stop()
+	})
+
+	model := NewModel([]*process.Panel{panel})
+	start := time.Now()
+	final, err := runProgramForTest(t, model, 4*time.Second, func(prog *tea.Program) {
+		time.Sleep(50 * time.Millisecond)
+		prog.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("program quit took too long: %v", elapsed)
+	}
+
+	got := final.(Model)
+	if !got.exiting {
+		t.Fatal("expected final model to have entered exiting state")
+	}
+	if got.exitCompleted != 1 {
+		t.Fatalf("exitCompleted = %d, want 1", got.exitCompleted)
+	}
+	if len(got.exitStatuses) != 1 || !strings.Contains(got.exitStatuses[0], "kill command failed") {
+		t.Fatalf("exitStatuses = %v, want kill command failure", got.exitStatuses)
+	}
+	if panel.Running() {
+		t.Fatal("expected panel stopped after quit flow")
 	}
 }
 

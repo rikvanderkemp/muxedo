@@ -52,6 +52,49 @@ func BenchmarkPanelDisplayForView_cached(b *testing.B) {
 	}
 }
 
+func BenchmarkPanelDisplayState_dirty_small(b *testing.B) {
+	p := New("bench", "true", "", ".")
+	p.termMu.Lock()
+	_, _ = p.term.Write([]byte("\x1b[31mhello\x1b[0m\r\nworld\r\n"))
+	p.termMu.Unlock()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		p.markDisplayDirty()
+		_ = p.DisplayState()
+	}
+}
+
+func BenchmarkPanelDisplayState_dirty_large(b *testing.B) {
+	p := New("bench", "true", "", ".")
+	p.Resize(160, 48)
+
+	var screen strings.Builder
+	for row := 0; row < 48; row++ {
+		for col := 0; col < 160; col++ {
+			if col%16 == 0 {
+				screen.WriteString("\x1b[3")
+				screen.WriteByte(byte('1' + (col/16)%7))
+				screen.WriteByte('m')
+			}
+			screen.WriteByte('a' + byte((row+col)%26))
+		}
+		if row < 47 {
+			screen.WriteString("\r\n")
+		}
+	}
+
+	p.termMu.Lock()
+	_, _ = p.term.Write([]byte(screen.String()))
+	p.termMu.Unlock()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		p.markDisplayDirty()
+		_ = p.DisplayState()
+	}
+}
+
 func BenchmarkScrollbackWriterHistory(b *testing.B) {
 	b.StopTimer()
 	dir := b.TempDir()
@@ -62,5 +105,20 @@ func BenchmarkScrollbackWriterHistory(b *testing.B) {
 
 	for b.Loop() {
 		_ = sw.History(append([]string(nil), screen...))
+	}
+}
+
+func BenchmarkMergeHistoryLineRecords_WorstCaseBoundaryScan(b *testing.B) {
+	scrollback := make([]HistoryLine, 4096)
+	for i := range scrollback {
+		scrollback[i] = HistoryLine{ID: uint64(i + 1), Text: "line"}
+	}
+	screen := make([]HistoryLine, 256)
+	copy(screen, scrollback[len(scrollback)-len(screen)+1:])
+	screen[len(screen)-1] = HistoryLine{ID: uint64(len(scrollback) + 1), Text: "tail"}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = mergeHistoryLineRecords(scrollback, screen)
 	}
 }

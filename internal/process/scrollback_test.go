@@ -287,3 +287,26 @@ func TestMergeHistoryLineRecordsPrefersFreshScreenText(t *testing.T) {
 		}
 	}
 }
+
+func TestLongestSuffixPrefixOverlap(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    []int
+		pattern []int
+		want    int
+	}{
+		{name: "none", text: []int{1, 2, 3}, pattern: []int{4, 5}, want: 0},
+		{name: "partial", text: []int{1, 2, 3, 4}, pattern: []int{3, 4, 5}, want: 2},
+		{name: "full pattern", text: []int{1, 2, 3}, pattern: []int{1, 2, 3}, want: 3},
+		{name: "repeated prefix", text: []int{1, 2, 1, 2}, pattern: []int{1, 2, 3}, want: 2},
+		{name: "duplicate values", text: []int{7, 7, 7}, pattern: []int{7, 7}, want: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := longestSuffixPrefixOverlap(tt.text, tt.pattern); got != tt.want {
+				t.Fatalf("longestSuffixPrefixOverlap(%v, %v) = %d, want %d", tt.text, tt.pattern, got, tt.want)
+			}
+		})
+	}
+}
