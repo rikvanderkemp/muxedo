@@ -37,8 +37,19 @@ type Panel struct {
 	waitDone   chan error
 
 	displayMu    sync.Mutex
-	displayCache string
+	displayCache DisplayState
 	displayDirty bool
+}
+
+type CursorState struct {
+	Visible bool
+	X       int
+	Y       int
+}
+
+type DisplayState struct {
+	Output string
+	Cursor CursorState
 }
 
 // ExitError returns panel process exit error recorded after shutdown.
@@ -58,11 +69,12 @@ func New(name, cmd, cmdKill, dir string) *Panel {
 // NewWithCommandSpec creates panel from validated command specs.
 func NewWithCommandSpec(name string, command, kill CommandSpec, dir string) *Panel {
 	return &Panel{
-		Name:    name,
-		Command: command,
-		Kill:    kill,
-		Dir:     dir,
-		term:    vt10x.New(vt10x.WithSize(80, 24)),
+		Name:         name,
+		Command:      command,
+		Kill:         kill,
+		Dir:          dir,
+		term:         vt10x.New(vt10x.WithSize(80, 24)),
+		displayDirty: true,
 	}
 }
 
@@ -74,12 +86,13 @@ func NewWithScrollback(name, cmd, cmdKill, dir, scrollbackDir string, maxBytes i
 // NewWithScrollbackCommandSpec creates panel with persisted scrollback using command specs.
 func NewWithScrollbackCommandSpec(name string, command, kill CommandSpec, dir, scrollbackDir string, maxBytes int64) *Panel {
 	return &Panel{
-		Name:    name,
-		Command: command,
-		Kill:    kill,
-		Dir:     dir,
-		term:    vt10x.New(vt10x.WithSize(80, 24)),
-		sb:      newScrollbackWriter(scrollbackDir, name, maxBytes),
+		Name:         name,
+		Command:      command,
+		Kill:         kill,
+		Dir:          dir,
+		term:         vt10x.New(vt10x.WithSize(80, 24)),
+		sb:           newScrollbackWriter(scrollbackDir, name, maxBytes),
+		displayDirty: true,
 	}
 }
 
@@ -135,7 +148,7 @@ func (p *Panel) readLoop(ptmx *os.File) {
 			p.appendHistory(buf[:n])
 			p.termMu.Lock()
 			p.term.Write(buf[:n]) //nolint:errcheck
-			termSnap := p.viewSnapshotLocked()
+			termSnap := p.viewStateLocked().Output
 			p.termMu.Unlock()
 			p.markDisplayDirty()
 			if p.sb != nil {
@@ -177,7 +190,7 @@ func (p *Panel) waitLoop(ptmx *os.File, cmd *exec.Cmd) {
 
 // Output returns current terminal snapshot as plain text.
 func (p *Panel) Output() string {
-	return p.viewSnapshot()
+	return p.viewState().Output
 }
 
 // Resize resizes panel terminal and reflows buffered history.
@@ -424,6 +437,11 @@ func (p *Panel) DisplayDirty() bool {
 // screen has not changed since the last call, it reuses the cached string and
 // avoids vt10x.Terminal.String(). History and Output always read fresh state.
 func (p *Panel) DisplayForView() string {
+	return p.DisplayState().Output
+}
+
+// DisplayState returns terminal snapshot and cursor state for TUI rendering.
+func (p *Panel) DisplayState() DisplayState {
 	for {
 		p.displayMu.Lock()
 		if !p.displayDirty {
@@ -433,7 +451,7 @@ func (p *Panel) DisplayForView() string {
 		}
 		p.displayMu.Unlock()
 
-		s := p.viewSnapshot()
+		s := p.viewState()
 
 		p.displayMu.Lock()
 		if !p.displayDirty {
@@ -458,8 +476,22 @@ func (p *Panel) DisplayForView() string {
 	}
 }
 
-func (p *Panel) viewSnapshotLocked() string {
+func (p *Panel) viewStateLocked() DisplayState {
 	cols, rows := p.term.Size()
+	cur := p.term.Cursor()
+	cursorVisible := p.term.CursorVisible()
+	if cur.X < 0 {
+		cur.X = 0
+	}
+	if cur.Y < 0 {
+		cur.Y = 0
+	}
+	if cols > 0 && cur.X >= cols {
+		cur.X = cols - 1
+	}
+	if rows > 0 && cur.Y >= rows {
+		cur.Y = rows - 1
+	}
 	var b strings.Builder
 
 	for y := 0; y < rows; y++ {
@@ -471,6 +503,9 @@ func (p *Panel) viewSnapshotLocked() string {
 				lastNonEmpty = x
 				break
 			}
+		}
+		if cursorVisible && y == cur.Y && cur.X > lastNonEmpty {
+			lastNonEmpty = cur.X
 		}
 
 		var lastFG, lastBG vt10x.Color = vt10x.DefaultFG, vt10x.DefaultBG
@@ -498,11 +533,23 @@ func (p *Panel) viewSnapshotLocked() string {
 			b.WriteByte('\n')
 		}
 	}
-	return b.String()
+
+	return DisplayState{
+		Output: b.String(),
+		Cursor: CursorState{
+			Visible: cursorVisible,
+			X:       cur.X,
+			Y:       cur.Y,
+		},
+	}
 }
 
 func (p *Panel) viewSnapshot() string {
+	return p.viewState().Output
+}
+
+func (p *Panel) viewState() DisplayState {
 	p.termMu.RLock()
 	defer p.termMu.RUnlock()
-	return p.viewSnapshotLocked()
+	return p.viewStateLocked()
 }

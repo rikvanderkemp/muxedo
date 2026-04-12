@@ -213,6 +213,40 @@ func TestHistoryLinesExcludesStaleScrollbackAfterReset(t *testing.T) {
 	}
 }
 
+func TestDisplayStateIncludesCursor(t *testing.T) {
+	p := New("test", "echo hi", "", ".")
+	p.termMu.Lock()
+	p.term.Write([]byte("ab\ncd")) //nolint:errcheck
+	p.termMu.Unlock()
+
+	got := p.DisplayState()
+	if got.Output == "" {
+		t.Fatal("expected display output")
+	}
+	if !got.Cursor.Visible {
+		t.Fatal("expected cursor visible by default")
+	}
+	if got.Cursor.X < 0 || got.Cursor.Y < 0 {
+		t.Fatalf("expected non-negative cursor coords, got %+v", got.Cursor)
+	}
+}
+
+func TestDisplayStatePreservesCursorColumnPastText(t *testing.T) {
+	p := New("test", "echo hi", "", ".")
+	p.termMu.Lock()
+	p.term.Write([]byte("ab")) //nolint:errcheck
+	p.termMu.Unlock()
+
+	got := p.DisplayState()
+	lines := strings.Split(got.Output, "\n")
+	if got.Cursor.X != 2 {
+		t.Fatalf("expected cursor after typed text, got %+v", got.Cursor)
+	}
+	if len(lines) == 0 || len(lines[0]) < 3 {
+		t.Fatalf("expected output to preserve cursor column, got %q", got.Output)
+	}
+}
+
 func TestRunCmdKillReportsCommandError(t *testing.T) {
 	p := NewWithCommandSpec("test", CommandSpec{Shell: "true"}, CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
 

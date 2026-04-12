@@ -1048,8 +1048,8 @@ func TestVEntersSelectModeFromNormalAndEscReturnsToNormal(t *testing.T) {
 	model.width = 80
 	model.height = 12
 	model.panelRunning = func(*process.Panel) bool { return true }
-	model.displayForView = func(*process.Panel) string {
-		return "alpha\nbeta"
+	model.displayForView = func(*process.Panel) process.DisplayState {
+		return process.DisplayState{Output: "alpha\nbeta"}
 	}
 
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
@@ -1115,8 +1115,8 @@ func TestSelectModeCopiesSelectedText(t *testing.T) {
 	model.width = 20
 	model.height = 8
 	model.panelRunning = func(*process.Panel) bool { return true }
-	model.displayForView = func(*process.Panel) string {
-		return "alpha\nbeta"
+	model.displayForView = func(*process.Panel) process.DisplayState {
+		return process.DisplayState{Output: "alpha\nbeta"}
 	}
 
 	var copied string
@@ -1143,8 +1143,8 @@ func TestSelectModeMouseDragUpdatesSelection(t *testing.T) {
 	model.width = 20
 	model.height = 8
 	model.panelRunning = func(*process.Panel) bool { return true }
-	model.displayForView = func(*process.Panel) string {
-		return "alpha\nbeta"
+	model.displayForView = func(*process.Panel) process.DisplayState {
+		return process.DisplayState{Output: "alpha\nbeta"}
 	}
 	model.enterSelectMode()
 

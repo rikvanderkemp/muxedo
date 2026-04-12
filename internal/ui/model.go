@@ -121,7 +121,7 @@ type Model struct {
 	panelRunning     func(*process.Panel) bool
 	restartPanel     func(*process.Panel) error
 	historyLines     func(*process.Panel) []process.HistoryLine
-	displayForView   func(*process.Panel) string
+	displayForView   func(*process.Panel) process.DisplayState
 	copySelection    func(string) error
 	exiting          bool
 	exitStatuses     []string
@@ -168,8 +168,8 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 		historyLines: func(p *process.Panel) []process.HistoryLine {
 			return p.History()
 		},
-		displayForView: func(p *process.Panel) string {
-			return p.DisplayForView()
+		displayForView: func(p *process.Panel) process.DisplayState {
+			return p.DisplayState()
 		},
 		copySelection: copyTextToClipboard,
 	}
@@ -198,8 +198,8 @@ func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec
 		historyLines: func(p *process.Panel) []process.HistoryLine {
 			return p.History()
 		},
-		displayForView: func(p *process.Panel) string {
-			return p.DisplayForView()
+		displayForView: func(p *process.Panel) process.DisplayState {
+			return p.DisplayState()
 		},
 		copySelection: copyTextToClipboard,
 	}
@@ -1482,8 +1482,8 @@ func (m *Model) selectionLinesForPanel(idx, pageSize int) ([]string, []string) {
 		return lines, append([]string(nil), lines...)
 	}
 
-	raw := m.displayForView(m.panels[idx])
-	return fitLines(raw, pageSize, width), fitLines(ansi.Strip(raw), pageSize, width)
+	view := m.displayForView(m.panels[idx])
+	return fitLines(view, pageSize, width, false), fitLines(process.DisplayState{Output: ansi.Strip(view.Output)}, pageSize, width, false)
 }
 
 func (m Model) activePaneContentWidth() int {
