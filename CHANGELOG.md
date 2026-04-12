@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.7](https://github.com/rikvanderkemp/muxedo/compare/v0.1.6...v0.1.7) (2026-04-12)
+
+
+### Features
+
+* **app:** make exit support message configurable ([#20](https://github.com/rikvanderkemp/muxedo/issues/20)) ([1866be9](https://github.com/rikvanderkemp/muxedo/commit/1866be9f0f74e36e6b48e5811fd7526d7a1d7211))
+* **install:** add curl installer script ([#18](https://github.com/rikvanderkemp/muxedo/issues/18)) ([2d65c78](https://github.com/rikvanderkemp/muxedo/commit/2d65c7837025fcd596ddcd92ddf633c4e2de885c))
+
+
+### Bug Fixes
+
+* **release:** sync release pr body with changelog ([#21](https://github.com/rikvanderkemp/muxedo/issues/21)) ([53f6608](https://github.com/rikvanderkemp/muxedo/commit/53f660891a4a53c6eae5729039c6e5a873213d73))
+
 ## [0.1.6](https://github.com/rikvanderkemp/muxedo/compare/v0.1.5...v0.1.6) (2026-04-12)
 
 
