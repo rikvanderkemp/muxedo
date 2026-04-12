@@ -8,6 +8,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"muxedo/internal/process"
 )
 
 type statusSegment struct {
@@ -75,7 +77,7 @@ func renderStatusLine(theme Theme, width int, segments []statusSegment) string {
 }
 
 // insertMode is read only when active is true: green border/title in insert, orange in normal.
-func renderPane(theme Theme, title string, output string, width, height int, active bool, stopped bool, insertMode bool, scrollMode bool, selectMode bool, viewport *paneViewport, timer string) string {
+func renderPane(theme Theme, title string, output process.DisplayState, width, height int, active bool, stopped bool, insertMode bool, scrollMode bool, selectMode bool, viewport *paneViewport, timer string) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -163,7 +165,7 @@ func renderPane(theme Theme, title string, output string, width, height int, act
 		outLines--
 	}
 
-	lines := fitLines(output, outLines, innerW)
+	lines := fitLines(output, outLines, innerW, active && insertMode && viewport == nil && !stopped)
 	if viewport != nil {
 		lines = fitViewportLines(theme, viewport, outLines, innerW)
 	}
@@ -171,7 +173,7 @@ func renderPane(theme Theme, title string, output string, width, height int, act
 		if viewport != nil {
 			lines = fitViewportLines(theme, viewport, 1, innerW)
 		} else {
-			lines = fitLines(output, 1, innerW)
+			lines = fitLines(output, 1, innerW, active && insertMode && !stopped)
 		}
 	}
 
@@ -320,13 +322,15 @@ func formatUnit(value int, suffix string) string {
 
 // fitLines takes the VT screen dump and returns exactly `n` lines,
 // each truncated/padded to `maxWidth`.
-func fitLines(raw string, n, maxWidth int) []string {
-	all := strings.Split(raw, "\n")
-	all = trimViewportTail(all)
+func fitLines(view process.DisplayState, n, maxWidth int, showCursor bool) []string {
+	all := strings.Split(view.Output, "\n")
+	all = trimViewportTail(all, visibleCursorRow(view, showCursor))
 
+	start := 0
 	// Take last n lines (tail)
 	if len(all) > n {
-		all = all[len(all)-n:]
+		start = len(all) - n
+		all = all[start:]
 	}
 
 	lines := make([]string, n)
@@ -338,10 +342,40 @@ func fitLines(raw string, n, maxWidth int) []string {
 		}
 	}
 
+	if showCursor && view.Cursor.Visible && maxWidth > 0 {
+		row := view.Cursor.Y - start
+		if row >= 0 && row < len(lines) {
+			lines[row] = renderCursorCell(lines[row], view.Cursor.X, maxWidth)
+		}
+	}
+
 	return lines
 }
 
-func trimViewportTail(lines []string) []string {
+func visibleCursorRow(view process.DisplayState, showCursor bool) int {
+	if !showCursor || !view.Cursor.Visible {
+		return -1
+	}
+	return view.Cursor.Y
+}
+
+func renderCursorCell(line string, col, maxWidth int) string {
+	if col < 0 {
+		col = 0
+	}
+	if col >= maxWidth {
+		col = maxWidth - 1
+	}
+	before := ansi.Cut(line, 0, col)
+	cell := ansi.Cut(line, col, col+1)
+	after := ansi.Cut(line, col+1, maxWidth)
+	if cell == "" {
+		cell = " "
+	}
+	return before + "\x1b[7m" + cell + "\x1b[27m" + after
+}
+
+func trimViewportTail(lines []string, cursorRow int) []string {
 	lastNonEmpty := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(ansi.Strip(lines[i])) != "" {
@@ -356,6 +390,9 @@ func trimViewportTail(lines []string) []string {
 	// Keep one trailing blank row after the last visible content so prompts
 	// that end with a newline still leave space for the current input line.
 	keep := lastNonEmpty + 2
+	if cursorRow >= 0 && cursorRow+1 > keep {
+		keep = cursorRow + 1
+	}
 	if keep > len(lines) {
 		keep = len(lines)
 	}

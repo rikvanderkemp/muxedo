@@ -103,7 +103,7 @@ func TestRenderPaneFooterTruncatesTimerToWidth(t *testing.T) {
 }
 
 func TestRenderPaneShortBodyKeepsOutputVisible(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", "hello world", 20, 4, false, false, false, false, false, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello world"}, 20, 4, false, false, false, false, false, nil, "1s")
 	if !strings.Contains(pane, "hello") {
 		t.Fatalf("expected short pane to keep output visible, got %q", pane)
 	}
@@ -121,11 +121,44 @@ func TestFitLinesTrimsBlankTerminalTail(t *testing.T) {
 		"",
 	}, "\n")
 
-	lines := fitLines(raw, 3, 50)
+	lines := fitLines(process.DisplayState{Output: raw}, 3, 50, false)
 	joined := strings.Join(lines, "\n")
 
 	if !strings.Contains(joined, "Insert mode demo") {
 		t.Fatalf("expected prompt text to stay visible, got %q", joined)
+	}
+}
+
+func TestFitLinesShowsCursorInVisibleRow(t *testing.T) {
+	lines := fitLines(process.DisplayState{
+		Output: "alpha\nbeta",
+		Cursor: process.CursorState{Visible: true, X: 1, Y: 1},
+	}, 2, 5, true)
+
+	if !strings.Contains(lines[1], "\x1b[7m") {
+		t.Fatalf("expected reverse-video cursor in visible row, got %q", lines[1])
+	}
+}
+
+func TestFitLinesHidesCursorWhenDisabled(t *testing.T) {
+	lines := fitLines(process.DisplayState{
+		Output: "alpha",
+		Cursor: process.CursorState{Visible: true, X: 0, Y: 0},
+	}, 1, 5, false)
+
+	if strings.Contains(lines[0], "\x1b[7m") {
+		t.Fatalf("expected no cursor styling, got %q", lines[0])
+	}
+}
+
+func TestFitLinesKeepsBlankCursorRowVisible(t *testing.T) {
+	lines := fitLines(process.DisplayState{
+		Output: "prompt\n\n",
+		Cursor: process.CursorState{Visible: true, X: 0, Y: 2},
+	}, 3, 6, true)
+
+	if !strings.Contains(lines[2], "\x1b[7m") {
+		t.Fatalf("expected cursor styling on blank cursor row, got %q", lines[2])
 	}
 }
 
@@ -173,14 +206,14 @@ func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
 }
 
 func TestRenderPaneShowsScrollModeTitle(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", "hello", 20, 6, true, false, false, true, false, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, false, false, true, false, nil, "1s")
 	if !strings.Contains(pane, "SCROLL") {
 		t.Fatalf("expected scroll mode title, got %q", pane)
 	}
 }
 
 func TestRenderPaneShowsSelectModeTitle(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", "hello", 20, 6, true, false, false, false, true, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, false, false, false, true, nil, "1s")
 	if !strings.Contains(pane, "SELECT") {
 		t.Fatalf("expected select mode title, got %q", pane)
 	}
