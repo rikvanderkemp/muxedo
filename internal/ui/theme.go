@@ -2,7 +2,7 @@
 package ui
 
 import (
-	"muxedo/internal/config"
+	"github.com/rikvanderkemp/muxedo/internal/config"
 
 	"github.com/charmbracelet/lipgloss"
 )

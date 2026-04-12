@@ -14,9 +14,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"muxedo/internal/layout"
-	"muxedo/internal/process"
-	"muxedo/internal/profile"
+	"github.com/rikvanderkemp/muxedo/internal/layout"
+	"github.com/rikvanderkemp/muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/profile"
 )
 
 type tickMsg time.Time

@@ -58,6 +58,20 @@ When `-profile` is omitted, muxedo looks for `./.muxedo` in the working director
 
 ## Install
 
+### Go
+
+Install the latest tagged release with Go:
+
+```bash
+go install github.com/rikvanderkemp/muxedo@latest
+```
+
+Install a specific tagged release:
+
+```bash
+go install github.com/rikvanderkemp/muxedo@v0.1.0
+```
+
 ### Homebrew (macOS and Linux)
 
 Requires [Homebrew](https://brew.sh).

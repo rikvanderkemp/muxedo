@@ -9,8 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"muxedo/internal/process"
-	"muxedo/internal/profile"
+	"github.com/rikvanderkemp/muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/profile"
 )
 
 func historyLinesOf(lines ...string) []process.HistoryLine {

@@ -11,7 +11,7 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
 
-	"muxedo/internal/process"
+	"github.com/rikvanderkemp/muxedo/internal/process"
 )
 
 // PanelSpec describes one configured panel command.
