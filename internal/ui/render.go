@@ -16,9 +16,15 @@ type statusSegment struct {
 }
 
 type paneViewport struct {
-	Lines       []string
-	SelectedRow int
-	MarkedRow   int
+	Lines             []string
+	PlainLines        []string
+	SelectedRow       int
+	MarkedRow         int
+	SelectionActive   bool
+	SelectionStartRow int
+	SelectionStartCol int
+	SelectionEndRow   int
+	SelectionEndCol   int
 }
 
 // renderStatusLine renders a single full-width status row.
@@ -68,7 +74,7 @@ func renderStatusLine(theme Theme, width int, segments []statusSegment) string {
 }
 
 // insertMode is read only when active is true: green border/title in insert, orange in normal.
-func renderPane(theme Theme, title string, output string, width, height int, active bool, stopped bool, insertMode bool, scrollMode bool, viewport *paneViewport, timer string) string {
+func renderPane(theme Theme, title string, output string, width, height int, active bool, stopped bool, insertMode bool, scrollMode bool, selectMode bool, viewport *paneViewport, timer string) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -85,6 +91,8 @@ func renderPane(theme Theme, title string, output string, width, height int, act
 	if active {
 		if insertMode {
 			displayTitle += " · INSERT"
+		} else if selectMode {
+			displayTitle += " · SELECT"
 		} else if scrollMode {
 			displayTitle += " · SCROLL"
 		} else {
@@ -360,6 +368,17 @@ func fitViewportLines(theme Theme, viewport *paneViewport, n, maxWidth int) []st
 		if i < len(viewport.Lines) {
 			line = padOrTruncate(viewport.Lines[i], maxWidth)
 		}
+		plainLine := ansi.Strip(line)
+		if i < len(viewport.PlainLines) {
+			plainLine = padOrTruncate(viewport.PlainLines[i], maxWidth)
+		}
+
+		if viewport.SelectionActive {
+			if startCol, endCol, ok := selectionColumnsForRow(viewport, i, maxWidth); ok {
+				lines[i] = renderSelectedColumns(theme, plainLine, startCol, endCol)
+				continue
+			}
+		}
 
 		switch {
 		case i == viewport.SelectedRow && i == viewport.MarkedRow:
@@ -384,6 +403,87 @@ func fitViewportLines(theme Theme, viewport *paneViewport, n, maxWidth int) []st
 		lines[i] = line
 	}
 	return lines
+}
+
+func selectionColumnsForRow(viewport *paneViewport, row, maxWidth int) (int, int, bool) {
+	if !viewport.SelectionActive {
+		return 0, 0, false
+	}
+	startRow, startCol, endRow, endCol := normalizeSelection(
+		viewport.SelectionStartRow,
+		viewport.SelectionStartCol,
+		viewport.SelectionEndRow,
+		viewport.SelectionEndCol,
+	)
+	if row < startRow || row > endRow {
+		return 0, 0, false
+	}
+
+	lineStart := 0
+	lineEnd := maxWidth
+	if row == startRow {
+		lineStart = startCol
+	}
+	if row == endRow {
+		lineEnd = endCol + 1
+	}
+	if lineStart < 0 {
+		lineStart = 0
+	}
+	if lineEnd > maxWidth {
+		lineEnd = maxWidth
+	}
+	if lineStart >= lineEnd {
+		return 0, 0, false
+	}
+	return lineStart, lineEnd, true
+}
+
+func renderSelectedColumns(theme Theme, line string, startCol, endCol int) string {
+	startCol = max(0, startCol)
+	endCol = max(startCol, endCol)
+	before := sliceByCells(line, 0, startCol)
+	selected := sliceByCells(line, startCol, endCol)
+	after := sliceByCells(line, endCol, ansi.StringWidth(line))
+	if selected == "" {
+		return line
+	}
+	selected = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(theme.color(theme.OverlayFG)).
+		Background(theme.color(theme.StatusActivePanelBG)).
+		Render(selected)
+	return before + selected + after
+}
+
+func normalizeSelection(startRow, startCol, endRow, endCol int) (int, int, int, int) {
+	if startRow > endRow || (startRow == endRow && startCol > endCol) {
+		return endRow, endCol, startRow, startCol
+	}
+	return startRow, startCol, endRow, endCol
+}
+
+func sliceByCells(line string, startCol, endCol int) string {
+	if endCol <= startCol {
+		return ""
+	}
+	var out strings.Builder
+	col := 0
+	for _, r := range line {
+		width := ansi.StringWidth(string(r))
+		if width <= 0 {
+			width = 1
+		}
+		nextCol := col + width
+		if nextCol > startCol && col < endCol {
+			out.WriteRune(r)
+		}
+		col = nextCol
+		if col >= endCol {
+			break
+		}
+	}
+	return out.String()
 }
 
 func padOrTruncate(line string, targetWidth int) string {
