@@ -11,7 +11,9 @@ import (
 type CommandSpec struct {
 	Program string
 	Args    []string
-	Shell   string
+	// Shell, if set, is executed via /bin/sh -c or /bin/sh -lc (see Build).
+	// It must come only from trusted configuration; it is not sanitized.
+	Shell string
 }
 
 // Validate ensures the command is well-formed.

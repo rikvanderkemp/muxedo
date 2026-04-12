@@ -163,6 +163,7 @@ shell_kill = "docker compose stop api"
 Exactly one of `program` or `shell` is required for each startup command and panel. Legacy `cmd` / `cmd_kill` fields are no longer supported.
 
 Shell fields are intentionally explicit and should be treated as trusted local automation because they execute through `sh`.
+Anyone who can edit the profile can run arbitrary commands on the host—treat the profile file like executable code and restrict who can change it.
 
 Panels are arranged in an auto-grid (near-square) layout that fills the terminal and resizes when the window changes.
 By default, panel numbering and placement follow the order of `[panel.*]` sections in the profile. Use `order` when a specific panel should take precedence without rearranging the rest of the file.
