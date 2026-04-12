@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/rikvanderkemp/muxedo/compare/v0.1.12...v0.1.13) (2026-04-12)
+
+
+### Features
+
+* **ui:** add configurable app title with random fallback ([#37](https://github.com/rikvanderkemp/muxedo/issues/37)) ([af3051f](https://github.com/rikvanderkemp/muxedo/commit/af3051f0521ff61f52116fb157a854cb563901a9))
+
 ## [0.1.12](https://github.com/rikvanderkemp/muxedo/compare/v0.1.11...v0.1.12) (2026-04-12)
 
 
