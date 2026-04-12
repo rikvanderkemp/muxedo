@@ -2,8 +2,10 @@
 package ui
 
 import (
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -398,6 +400,28 @@ func TestRunningPanelForwardsMInInsertMode(t *testing.T) {
 	}
 }
 
+func TestRunningPanelInsertModeLogsSendInputError(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.panelInsertMode = true
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.sendInput = func(*process.Panel, []byte) error {
+		return io.ErrClosedPipe
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	model = next.(Model)
+
+	if len(model.messageBuffer) != 1 {
+		t.Fatalf("messageBuffer len = %d, want 1", len(model.messageBuffer))
+	}
+	if !strings.Contains(model.messageBuffer[0], "error: sending input to panel one") {
+		t.Fatalf("messageBuffer[0] = %q", model.messageBuffer[0])
+	}
+}
+
 func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
@@ -415,6 +439,37 @@ func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	_ = next.(Model)
 	if len(writes) != 0 {
 		t.Fatalf("expected no write in normal mode, got %v", writes)
+	}
+}
+
+func TestKillPanelCmdIncludesKillCommandFailure(t *testing.T) {
+	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "true"}, process.CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
+
+	msg := killPanelCmd(0, panel)().(exitProgressMsg)
+	if !strings.Contains(msg.status, "kill command failed") {
+		t.Fatalf("status = %q, want kill command failure", msg.status)
+	}
+}
+
+func TestStreamStartupOutputAcceptsLongLines(t *testing.T) {
+	model := NewModel(nil)
+	model.msgChan = make(chan tea.Msg, 2)
+
+	done := make(chan struct{}, 1)
+	line := strings.Repeat("x", 70*1024)
+
+	model.streamStartupOutput(3, strings.NewReader(line+"\n"), done)
+	<-done
+
+	msg := (<-model.msgChan).(startupLogMsg)
+	if msg.idx != 3 {
+		t.Fatalf("msg.idx = %d, want 3", msg.idx)
+	}
+	if len(msg.line) != len(line) {
+		t.Fatalf("len(msg.line) = %d, want %d", len(msg.line), len(line))
+	}
+	if msg.line != line {
+		t.Fatal("long startup line truncated or changed")
 	}
 }
 
@@ -603,6 +658,48 @@ func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
 	msg := cmd()
 	if got, ok := msg.(LogMsg); !ok || got != LogMsg("late log") {
 		t.Fatalf("cmd() = %#v, want LogMsg(%q)", msg, "late log")
+	}
+}
+
+func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
+	model := NewModelWithSpecs([]profile.StartupSpec{
+		{
+			WorkingDir: ".",
+			Command:    process.CommandSpec{Shell: "printf ready\\n"},
+			Mode:       profile.StartupModeAsync,
+		},
+	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model.msgChan = make(chan tea.Msg, 8)
+
+	model.runStartupItem(0, model.startupSpecs[0])
+
+	var sawRunning bool
+	var sawLog bool
+	var sawDone bool
+	deadline := time.After(2 * time.Second)
+	for !(sawRunning && sawLog && sawDone) {
+		select {
+		case msg := <-model.msgChan:
+			switch msg := msg.(type) {
+			case startupStatusMsg:
+				if msg.status == startupStatusRunning {
+					sawRunning = true
+				}
+				if msg.status == startupStatusOK {
+					sawDone = true
+				}
+			case LogMsg:
+				if strings.Contains(string(msg), "--- Starting printf ready") {
+					sawLog = true
+				}
+			case startupLogMsg:
+				if msg.line == "ready" {
+					sawLog = true
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for async startup messages: running=%v log=%v done=%v", sawRunning, sawLog, sawDone)
+		}
 	}
 }
 

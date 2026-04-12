@@ -15,53 +15,68 @@ import (
 	"muxedo/internal/update"
 )
 
-func TestResolveProfilePathUsesExplicitFlagValue(t *testing.T) {
+func TestResolveProfilePath(t *testing.T) {
 	tempDir := t.TempDir()
 	explicit := filepath.Join(tempDir, "profile.toml")
-	if err := os.WriteFile(filepath.Join(tempDir, ".muxedo"), []byte("ignored"), 0o644); err != nil {
+	dotMuxedo := filepath.Join(tempDir, ".muxedo")
+	if err := os.WriteFile(dotMuxedo, []byte("profile"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	got, err := withWorkingDir(tempDir, func() (string, error) {
-		return resolveProfilePath(explicit)
-	})
-	if err != nil {
-		t.Fatalf("resolveProfilePath() error = %v", err)
+	tests := []struct {
+		name      string
+		profile   string
+		removeDot bool
+		wantPath  string
+		wantErr   string
+	}{
+		{
+			name:     "uses explicit flag value",
+			profile:  explicit,
+			wantPath: explicit,
+		},
+		{
+			name:     "uses dot muxedo in working directory",
+			wantPath: dotMuxedo,
+		},
+		{
+			name:      "requires flag when dot muxedo missing",
+			removeDot: true,
+			wantErr:   "-profile is required",
+		},
 	}
-	if got != explicit {
-		t.Fatalf("resolveProfilePath() = %q, want %q", got, explicit)
-	}
-}
 
-func TestResolveProfilePathUsesDotMuxedoInWorkingDirectory(t *testing.T) {
-	tempDir := t.TempDir()
-	want := filepath.Join(tempDir, ".muxedo")
-	if err := os.WriteFile(want, []byte("profile"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.removeDot {
+				if err := os.Remove(dotMuxedo); err != nil {
+					t.Fatalf("Remove() error = %v", err)
+				}
+			} else if _, err := os.Stat(dotMuxedo); os.IsNotExist(err) {
+				if err := os.WriteFile(dotMuxedo, []byte("profile"), 0o644); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+			}
 
-	got, err := withWorkingDir(tempDir, func() (string, error) {
-		return resolveProfilePath("")
-	})
-	if err != nil {
-		t.Fatalf("resolveProfilePath() error = %v", err)
-	}
-	if got != want {
-		t.Fatalf("resolveProfilePath() = %q, want %q", got, want)
-	}
-}
-
-func TestResolveProfilePathRequiresFlagWhenDotMuxedoMissing(t *testing.T) {
-	tempDir := t.TempDir()
-
-	_, err := withWorkingDir(tempDir, func() (string, error) {
-		return resolveProfilePath("")
-	})
-	if err == nil {
-		t.Fatal("resolveProfilePath() error = nil, want error")
-	}
-	if err.Error() != "-profile is required" {
-		t.Fatalf("resolveProfilePath() error = %q, want %q", err, "-profile is required")
+			got, err := withWorkingDir(tempDir, func() (string, error) {
+				return resolveProfilePath(tt.profile)
+			})
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("resolveProfilePath() error = nil, want error")
+				}
+				if err.Error() != tt.wantErr {
+					t.Fatalf("resolveProfilePath() error = %q, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveProfilePath() error = %v", err)
+			}
+			if got != tt.wantPath {
+				t.Fatalf("resolveProfilePath() = %q, want %q", got, tt.wantPath)
+			}
+		})
 	}
 }
 

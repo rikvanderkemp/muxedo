@@ -4,6 +4,7 @@ package process
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -143,6 +144,28 @@ func TestPanelRestartResetsElapsed(t *testing.T) {
 	}
 }
 
+func TestPanelStopRecordsExitError(t *testing.T) {
+	p := New("test", "sleep 60", "", ".")
+	if err := p.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	p.Stop()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if err := p.ExitError(); err != nil {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("ExitError() remained nil after Stop()")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func TestResetScrollbackClearsPersistedHistory(t *testing.T) {
 	dir := t.TempDir()
 	p := NewWithScrollback("test", "echo hi", "", ".", dir, 0)
@@ -188,4 +211,75 @@ func TestHistoryLinesExcludesStaleScrollbackAfterReset(t *testing.T) {
 	if !strings.Contains(joined, "fresh") || !strings.Contains(joined, "output") {
 		t.Fatalf("expected current output to remain after reset, got %v", got[:min(len(got), 2)])
 	}
+}
+
+func TestRunCmdKillReportsCommandError(t *testing.T) {
+	p := NewWithCommandSpec("test", CommandSpec{Shell: "true"}, CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
+
+	err := p.RunCmdKill()
+	if err == nil {
+		t.Fatal("RunCmdKill() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "run kill command") {
+		t.Fatalf("RunCmdKill() error = %v, want wrapped run error", err)
+	}
+}
+
+func TestPanelConcurrentLifecycleReads(t *testing.T) {
+	p := New("test", "sleep 1", "", ".")
+	if err := p.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	stopReaders := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stopReaders:
+					return
+				default:
+					_ = p.Running()
+					_ = p.Elapsed()
+					_ = p.Output()
+					_ = p.DisplayForView()
+				}
+			}
+		}()
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if err := p.Restart(); err != nil {
+		close(stopReaders)
+		wg.Wait()
+		t.Fatalf("restart failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	p.Stop()
+
+	close(stopReaders)
+	wg.Wait()
+}
+
+func TestPanelRepeatedStopAndRestart(t *testing.T) {
+	p := New("test", "sleep 60", "", ".")
+	if err := p.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	p.Stop()
+	p.Stop()
+
+	if err := p.Restart(); err != nil {
+		t.Fatalf("restart after repeated stop failed: %v", err)
+	}
+	if !p.Running() {
+		t.Fatal("panel should be running after restart")
+	}
+
+	p.Stop()
+	p.Stop()
 }

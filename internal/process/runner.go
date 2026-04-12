@@ -15,6 +15,7 @@ import (
 	"github.com/hinshun/vt10x"
 )
 
+// Panel manages one running PTY-backed process and its rendered history.
 type Panel struct {
 	Name    string
 	Command CommandSpec
@@ -33,12 +34,14 @@ type Panel struct {
 	startedAt  time.Time
 	elapsed    time.Duration
 	exitErr    error
+	waitDone   chan error
 
 	displayMu    sync.Mutex
 	displayCache string
 	displayDirty bool
 }
 
+// ExitError returns panel process exit error recorded after shutdown.
 func (p *Panel) ExitError() error {
 	p.runtimeMu.RLock()
 	defer p.runtimeMu.RUnlock()
@@ -47,10 +50,12 @@ func (p *Panel) ExitError() error {
 
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
 
+// New creates panel from shell command strings.
 func New(name, cmd, cmdKill, dir string) *Panel {
 	return NewWithCommandSpec(name, CommandSpec{Shell: cmd}, CommandSpec{Shell: cmdKill}, dir)
 }
 
+// NewWithCommandSpec creates panel from validated command specs.
 func NewWithCommandSpec(name string, command, kill CommandSpec, dir string) *Panel {
 	return &Panel{
 		Name:    name,
@@ -61,10 +66,12 @@ func NewWithCommandSpec(name string, command, kill CommandSpec, dir string) *Pan
 	}
 }
 
+// NewWithScrollback creates panel with persisted scrollback using shell command strings.
 func NewWithScrollback(name, cmd, cmdKill, dir, scrollbackDir string, maxBytes int64) *Panel {
 	return NewWithScrollbackCommandSpec(name, CommandSpec{Shell: cmd}, CommandSpec{Shell: cmdKill}, dir, scrollbackDir, maxBytes)
 }
 
+// NewWithScrollbackCommandSpec creates panel with persisted scrollback using command specs.
 func NewWithScrollbackCommandSpec(name string, command, kill CommandSpec, dir, scrollbackDir string, maxBytes int64) *Panel {
 	return &Panel{
 		Name:    name,
@@ -84,6 +91,7 @@ func (p *Panel) ResetScrollback() {
 	}
 }
 
+// Start launches panel process and begins PTY capture.
 func (p *Panel) Start() error {
 	c, err := p.Command.Build(p.Dir, true)
 	if err != nil {
@@ -108,16 +116,18 @@ func (p *Panel) Start() error {
 	p.startedAt = time.Now()
 	p.elapsed = 0
 	p.exitErr = nil
+	p.waitDone = make(chan error, 1)
 	p.runtimeMu.Unlock()
 
 	p.running.Store(true)
 	p.markDisplayDirty()
 
-	go p.readLoop(ptmx, c)
+	go p.readLoop(ptmx)
+	go p.waitLoop(ptmx, c)
 	return nil
 }
 
-func (p *Panel) readLoop(ptmx *os.File, cmd *exec.Cmd) {
+func (p *Panel) readLoop(ptmx *os.File) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := ptmx.Read(buf)
@@ -136,25 +146,41 @@ func (p *Panel) readLoop(ptmx *os.File, cmd *exec.Cmd) {
 			break
 		}
 	}
+}
 
-	var exitErr error
-	if cmd != nil {
-		exitErr = cmd.Wait()
-	}
+func (p *Panel) waitLoop(ptmx *os.File, cmd *exec.Cmd) {
+	exitErr := cmd.Wait()
+	p.markStoppedForCmd(cmd)
 
 	p.runtimeMu.Lock()
-	if p.ptmx == ptmx && p.exitErr == nil {
+	waitDone := p.waitDone
+	if p.cmd == cmd {
+		p.cmd = nil
+		p.waitDone = nil
+	}
+	if p.ptmx == ptmx {
+		p.ptmx = nil
+	}
+	if p.exitErr == nil {
 		p.exitErr = exitErr
 	}
 	p.runtimeMu.Unlock()
 
-	p.markStoppedFor(ptmx)
+	if waitDone != nil {
+		waitDone <- exitErr
+		close(waitDone)
+	}
+	if ptmx != nil {
+		_ = ptmx.Close()
+	}
 }
 
+// Output returns current terminal snapshot as plain text.
 func (p *Panel) Output() string {
 	return p.viewSnapshot()
 }
 
+// Resize resizes panel terminal and reflows buffered history.
 func (p *Panel) Resize(cols, rows int) {
 	replay := p.historySnapshot()
 	p.termMu.Lock()
@@ -180,17 +206,20 @@ func (p *Panel) Resize(cols, rows int) {
 	p.markDisplayDirty()
 }
 
+// Running reports whether panel process is still active.
 func (p *Panel) Running() bool {
 	return p.running.Load()
 }
 
+// Stop requests panel shutdown and waits briefly for process exit.
 func (p *Panel) Stop() {
 	p.runtimeMu.Lock()
 	ptmx := p.ptmx
 	cmd := p.cmd
+	waitDone := p.waitDone
 	p.runtimeMu.Unlock()
 
-	p.markStoppedFor(ptmx)
+	p.markStoppedForCmd(cmd)
 
 	if ptmx != nil {
 		// Send Ctrl+C (0x03) to the pty
@@ -208,46 +237,43 @@ func (p *Panel) Stop() {
 
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
-
-		// Wait for the process to exit with a timeout
-		done := make(chan error, 1)
-		go func() {
-			done <- cmd.Wait()
-		}()
-
-		var exitErr error
-		select {
-		case err := <-done:
-			exitErr = err
-			// Process exited gracefully
-		case <-time.After(200 * time.Millisecond):
-			// Force kill if it didn't exit after 200ms
-			_ = cmd.Process.Kill()
-			exitErr = <-done // wait for the kill to complete
-		}
-
-		p.runtimeMu.Lock()
-		if p.cmd == cmd {
-			p.cmd = nil
-			if p.exitErr == nil {
-				p.exitErr = exitErr
-			}
-		}
-		p.runtimeMu.Unlock()
+		p.waitForExit(cmd, waitDone)
 	}
 }
 
-func (p *Panel) RunCmdKill() {
-	if p.Kill.IsZero() {
+func (p *Panel) waitForExit(cmd *exec.Cmd, waitDone <-chan error) {
+	if waitDone == nil {
 		return
+	}
+
+	select {
+	case <-waitDone:
+		return
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	<-waitDone
+}
+
+// RunCmdKill runs optional panel kill command.
+func (p *Panel) RunCmdKill() error {
+	if p.Kill.IsZero() {
+		return nil
 	}
 	c, err := p.Kill.Build(p.Dir, true)
 	if err != nil {
-		return
+		return fmt.Errorf("build kill command: %w", err)
 	}
-	_ = c.Run()
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("run kill command: %w", err)
+	}
+	return nil
 }
 
+// Restart stops panel, resets terminal state, and starts it again.
 func (p *Panel) Restart() error {
 	p.Stop()
 
@@ -269,6 +295,7 @@ func (p *Panel) Restart() error {
 	return p.Start()
 }
 
+// Elapsed returns runtime for running panels or cached runtime after exit.
 func (p *Panel) Elapsed() time.Duration {
 	p.runtimeMu.RLock()
 	startedAt := p.startedAt
@@ -290,6 +317,7 @@ func (p *Panel) ScrollbackPath() string {
 	return p.sb.Path()
 }
 
+// HistoryLines returns panel history as plain text lines.
 func (p *Panel) HistoryLines() []string {
 	history := p.History()
 	if len(history) == 0 {
@@ -302,6 +330,7 @@ func (p *Panel) HistoryLines() []string {
 	return out
 }
 
+// History returns panel history with stable line identifiers.
 func (p *Panel) History() []HistoryLine {
 	screen := normalizeScreen(p.Output())
 	if p.sb == nil {
@@ -314,6 +343,7 @@ func (p *Panel) History() []HistoryLine {
 	return p.sb.History(screen)
 }
 
+// WriteInput writes raw bytes to panel PTY input stream.
 func (p *Panel) WriteInput(data []byte) error {
 	p.runtimeMu.RLock()
 	ptmx := p.ptmx
@@ -356,9 +386,9 @@ func (p *Panel) historySnapshot() []byte {
 	return cp
 }
 
-func (p *Panel) markStoppedFor(ptmx *os.File) {
+func (p *Panel) markStoppedForCmd(cmd *exec.Cmd) {
 	p.runtimeMu.Lock()
-	if ptmx != nil && p.ptmx != ptmx {
+	if cmd != nil && p.cmd != nil && p.cmd != cmd {
 		p.runtimeMu.Unlock()
 		return
 	}

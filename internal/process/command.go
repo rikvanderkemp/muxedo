@@ -12,7 +12,9 @@ import (
 type CommandSpec struct {
 	Program string
 	Args    []string
-	Shell   string
+	// Shell, if set, is executed via /bin/sh -c or /bin/sh -lc (see Build).
+	// It must come only from trusted configuration; it is not sanitized.
+	Shell string
 }
 
 // Validate ensures the command is well-formed.
@@ -54,8 +56,8 @@ func (c CommandSpec) Build(dir string, loginShell bool) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// MustBuild is a convenience for tests that expect a valid command spec.
-func (c CommandSpec) MustBuild(dir string, loginShell bool) *exec.Cmd {
+// mustBuild is a convenience for tests that expect a valid command spec.
+func (c CommandSpec) mustBuild(dir string, loginShell bool) *exec.Cmd {
 	cmd, err := c.Build(dir, loginShell)
 	if err != nil {
 		panic(err)
@@ -68,4 +70,5 @@ func (c CommandSpec) IsZero() bool {
 	return c.Program == "" && len(c.Args) == 0 && c.Shell == ""
 }
 
+// ErrEmptyCommand reports that a command spec was left unset.
 var ErrEmptyCommand = errors.New("empty command")

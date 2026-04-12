@@ -10,18 +10,22 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
+// DefaultPath is documented default location for muxedo config.
 const DefaultPath = "~/.config/muxedo/config.toml"
 
+// Config is top-level muxedo app config.
 type Config struct {
 	UI    UIConfig    `toml:"ui"`
 	Theme ThemeConfig `toml:"theme"`
 }
 
+// UIConfig controls runtime UI behavior flags.
 type UIConfig struct {
 	ShowExitMessage     *bool `toml:"show_exit_message"`
 	CheckUpdatesOnStart *bool `toml:"check_updates_on_start"`
 }
 
+// ThemeConfig defines UI color palette overrides.
 type ThemeConfig struct {
 	InactiveBorder      string `toml:"inactive_border"`
 	InactiveTitleFG     string `toml:"inactive_title_fg"`
@@ -54,6 +58,7 @@ type ThemeConfig struct {
 	StatusHintBG        string `toml:"status_hint_bg"`
 }
 
+// Default returns muxedo default config values.
 func Default() Config {
 	return Config{
 		UI: UIConfig{
@@ -64,6 +69,7 @@ func Default() Config {
 	}
 }
 
+// ExitMessageEnabled reports whether exit message should be shown.
 func (c Config) ExitMessageEnabled() bool {
 	if c.UI.ShowExitMessage == nil {
 		return true
@@ -71,6 +77,7 @@ func (c Config) ExitMessageEnabled() bool {
 	return *c.UI.ShowExitMessage
 }
 
+// CheckUpdatesOnStartEnabled reports whether startup update checks are enabled.
 func (c Config) CheckUpdatesOnStartEnabled() bool {
 	if c.UI.CheckUpdatesOnStart == nil {
 		return true
@@ -78,6 +85,7 @@ func (c Config) CheckUpdatesOnStartEnabled() bool {
 	return *c.UI.CheckUpdatesOnStart
 }
 
+// DefaultTheme returns built-in theme defaults.
 func DefaultTheme() ThemeConfig {
 	return ThemeConfig{
 		InactiveBorder:      "#5f87af",
@@ -112,6 +120,7 @@ func DefaultTheme() ThemeConfig {
 	}
 }
 
+// Load reads config from default path and returns zero config when missing.
 func Load() (Config, error) {
 	path, err := defaultPath()
 	if err != nil {
@@ -134,10 +143,12 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// Path returns resolved absolute config path.
 func Path() (string, error) {
 	return defaultPath()
 }
 
+// WriteDefault writes default config to standard location.
 func WriteDefault(force bool) (string, error) {
 	path, err := defaultPath()
 	if err != nil {
