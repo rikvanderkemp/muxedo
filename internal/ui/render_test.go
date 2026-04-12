@@ -102,7 +102,7 @@ func TestRenderPaneFooterTruncatesTimerToWidth(t *testing.T) {
 }
 
 func TestRenderPaneShortBodyKeepsOutputVisible(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", "hello world", 20, 4, false, false, false, false, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", "hello world", 20, 4, false, false, false, false, false, nil, "1s")
 	if !strings.Contains(pane, "hello") {
 		t.Fatalf("expected short pane to keep output visible, got %q", pane)
 	}
@@ -172,9 +172,60 @@ func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
 }
 
 func TestRenderPaneShowsScrollModeTitle(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", "hello", 20, 6, true, false, false, true, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", "hello", 20, 6, true, false, false, true, false, nil, "1s")
 	if !strings.Contains(pane, "SCROLL") {
 		t.Fatalf("expected scroll mode title, got %q", pane)
+	}
+}
+
+func TestRenderPaneShowsSelectModeTitle(t *testing.T) {
+	pane := renderPane(DefaultTheme(), "demo", "hello", 20, 6, true, false, false, false, true, nil, "1s")
+	if !strings.Contains(pane, "SELECT") {
+		t.Fatalf("expected select mode title, got %q", pane)
+	}
+}
+
+func TestFitViewportLinesHighlightsSelectedColumns(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(oldProfile)
+	})
+
+	lines := fitViewportLines(DefaultTheme(), &paneViewport{
+		Lines:             []string{"abcdef"},
+		SelectionActive:   true,
+		SelectionStartRow: 0,
+		SelectionStartCol: 1,
+		SelectionEndRow:   0,
+		SelectionEndCol:   3,
+	}, 1, 6)
+
+	if !strings.Contains(lines[0], "\x1b[") {
+		t.Fatalf("expected selected columns styled, got %q", lines[0])
+	}
+}
+
+func TestFitViewportLinesPreservesStyledUnselectedRowsDuringSelection(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(oldProfile)
+	})
+
+	styled := lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Render("green")
+	lines := fitViewportLines(DefaultTheme(), &paneViewport{
+		Lines:             []string{styled, styled},
+		PlainLines:        []string{"green", "green"},
+		SelectionActive:   true,
+		SelectionStartRow: 0,
+		SelectionStartCol: 1,
+		SelectionEndRow:   0,
+		SelectionEndCol:   3,
+	}, 2, 5)
+
+	if !strings.Contains(lines[1], "\x1b[") {
+		t.Fatalf("expected unselected row to keep ANSI styling, got %q", lines[1])
 	}
 }
 

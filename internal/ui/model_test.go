@@ -942,6 +942,139 @@ func TestZEntersScrollMode(t *testing.T) {
 	}
 }
 
+func TestVEntersSelectModeFromNormalAndEscReturnsToNormal(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.displayForView = func(*process.Panel) string {
+		return "alpha\nbeta"
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = next.(Model)
+	if !model.panelSelectMode {
+		t.Fatal("expected select mode after v")
+	}
+	if model.panelScrollMode {
+		t.Fatal("expected live select, not scroll mode")
+	}
+	if got := model.statusModeLabel(); got != "SELECT" {
+		t.Fatalf("expected SELECT mode label, got %q", got)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(Model)
+	if model.panelSelectMode {
+		t.Fatal("expected select mode cleared after Esc")
+	}
+	if model.panelScrollMode {
+		t.Fatal("expected return to normal after Esc")
+	}
+}
+
+func TestVEntersSelectModeFromScrollAndEscReturnsToScroll(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("a", "b", "c")
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	model = next.(Model)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = next.(Model)
+	if !model.panelSelectMode {
+		t.Fatal("expected select mode after v from scroll")
+	}
+	if !model.panelScrollMode {
+		t.Fatal("expected scroll state retained while selecting history")
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = next.(Model)
+	if model.panelSelectMode {
+		t.Fatal("expected select mode cleared after Esc")
+	}
+	if !model.panelScrollMode {
+		t.Fatal("expected return to scroll mode after Esc")
+	}
+}
+
+func TestSelectModeCopiesSelectedText(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 20
+	model.height = 8
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.displayForView = func(*process.Panel) string {
+		return "alpha\nbeta"
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	model.enterSelectMode()
+	model.startSelection(0, 1)
+	model.finishSelection(1, 2)
+	model.copyCurrentSelection()
+
+	if copied != "lpha\nbet" {
+		t.Fatalf("expected copied text %q, got %q", "lpha\nbet", copied)
+	}
+}
+
+func TestSelectModeMouseDragUpdatesSelection(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 20
+	model.height = 8
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.displayForView = func(*process.Panel) string {
+		return "alpha\nbeta"
+	}
+	model.enterSelectMode()
+
+	next, _ := model.Update(tea.MouseMsg{
+		X: 2, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	model = next.(Model)
+	next, _ = model.Update(tea.MouseMsg{
+		X: 4, Y: 3, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft,
+	})
+	model = next.(Model)
+	next, _ = model.Update(tea.MouseMsg{
+		X: 4, Y: 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft,
+	})
+	model = next.(Model)
+
+	sel := model.selections[0]
+	if !sel.Active {
+		t.Fatal("expected active selection after drag")
+	}
+	if sel.Dragging {
+		t.Fatal("expected selection drag ended on release")
+	}
+	if sel.StartRow != 0 || sel.StartCol != 1 || sel.EndRow != 1 || sel.EndCol != 3 {
+		t.Fatalf("unexpected selection %#v", sel)
+	}
+}
+
 func TestScrollModeConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),

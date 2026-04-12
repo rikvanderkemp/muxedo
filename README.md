@@ -139,6 +139,7 @@ By default, panel numbering and placement follow the order of `[panel.*]` sectio
 - **Vim-style panel modes** (after you focus a panel, you start in **normal** mode):
   - **`i`** or **`I`** — **insert** mode: keys (including `q`, `Ctrl+C`, etc.) are sent to the panel process, like a typical focused terminal.
   - **`z`** or **`Z`** — **scroll** mode: the panel becomes a read-only scrollback viewer with a line cursor and optional mark.
+  - **`v`** or **`V`** — **select** mode: drag with the left mouse button to select panel text. From normal mode this selects from the visible screen; from scroll mode it selects from the current history viewport.
   - **`Esc`** — **trickle**: from insert, first **`Esc`** returns to **normal**; from **normal**, **`Esc`** unfocuses the panel. (**`Ctrl+[`** is the same byte as **`Esc`** in a TTY, so it follows the same rule.)
   - In **normal** mode: **`m`** / **`M`** toggles maximize for the focused panel; **`r`** / **`R`** reloads (restarts) the panel command. Other keys are not sent to the panel.
 - In **scroll** mode:
@@ -147,6 +148,10 @@ By default, panel numbering and placement follow the order of `[panel.*]` sectio
   - **`g`** / **`G`** — jump to oldest history / live bottom.
   - **`m`** — toggle a persistent mark on the selected line.
   - **`Esc`** — leave scroll mode and return to normal mode.
+- In **select** mode:
+  - Left mouse drag — create or extend the selection inside the active panel.
+  - **`Enter`** or **`y`** — copy the selected text to the clipboard.
+  - **`Esc`** — leave select mode and return to the previous mode.
 - While a panel is maximized, **`hjkl`** and **`1`**–**`9`** keep the single-panel view and switch which panel is shown.
 - Pressing **`Esc`** from maximized **normal** mode restores the grid and clears focus.
 - When a panel process exits, the panel shows a "Press R to reload" overlay. In **normal** mode, press **`R`** (or **`r`**) to restart the command.
@@ -160,6 +165,8 @@ Each panel's output history is captured to a log file on disk. When the terminal
 Scrollback starts empty on each muxedo launch, so in-panel scrolling only shows the current app run.
 
 Focused panels can also enter **scroll** mode with `**z`** to inspect that history in place. Scroll mode merges the current visible screen with the existing file-backed scrollback, so it works best for shells and log output and remains best-effort for full-screen TUIs.
+
+Focused panels can enter **select** mode with `**v`** to copy text. Muxedo tries the OS clipboard first (`pbcopy`, `wl-copy`, `xclip`, `xsel`) and falls back to OSC52 terminal clipboard copy when available.
 
 The editor is no longer used for scrollback viewing.
 
