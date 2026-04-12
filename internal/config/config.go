@@ -12,7 +12,12 @@ import (
 const DefaultPath = "~/.config/muxedo/config.toml"
 
 type Config struct {
+	UI    UIConfig    `toml:"ui"`
 	Theme ThemeConfig `toml:"theme"`
+}
+
+type UIConfig struct {
+	ShowExitMessage *bool `toml:"show_exit_message"`
 }
 
 type ThemeConfig struct {
@@ -49,8 +54,18 @@ type ThemeConfig struct {
 
 func Default() Config {
 	return Config{
+		UI: UIConfig{
+			ShowExitMessage: boolPtr(true),
+		},
 		Theme: DefaultTheme(),
 	}
+}
+
+func (c Config) ExitMessageEnabled() bool {
+	if c.UI.ShowExitMessage == nil {
+		return true
+	}
+	return *c.UI.ShowExitMessage
 }
 
 func DefaultTheme() ThemeConfig {
@@ -147,4 +162,8 @@ func defaultPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".config", "muxedo", "config.toml"), nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

@@ -104,6 +104,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
+	if appConfig.ExitMessageEnabled() {
+		printExitMessage(stdout)
+	}
+
 	return 0
 }
 
@@ -168,6 +172,13 @@ func resolveProfilePath(flagValue string) (string, error) {
 	}
 
 	return "", fmt.Errorf("-profile is required")
+}
+
+func printExitMessage(w io.Writer) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Thanks for using muxedo.")
+	fmt.Fprintln(w, "Support development: https://buymeacoffee.com/rikvanderkemp")
+	fmt.Fprintln(w, "Turn this off in ~/.config/muxedo/config.toml with [ui] show_exit_message = false")
 }
 
 func printUsage(w io.Writer) {
