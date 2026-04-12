@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.9](https://github.com/rikvanderkemp/muxedo/compare/v0.1.8...v0.1.9) (2026-04-12)
+
+
+### Bug Fixes
+
+* **go:** harden process lifecycle and ui message handling ([#26](https://github.com/rikvanderkemp/muxedo/issues/26)) ([3bebff6](https://github.com/rikvanderkemp/muxedo/commit/3bebff61d0de681b5c82d8f498f56faaa241bc16))
+* **process:** confine scrollback files with os.Root ([#28](https://github.com/rikvanderkemp/muxedo/issues/28)) ([3c4e62f](https://github.com/rikvanderkemp/muxedo/commit/3c4e62f279e739eededbbab3bc5f6cf899e8578f))
+
 ## [0.1.8](https://github.com/rikvanderkemp/muxedo/compare/v0.1.7...v0.1.8) (2026-04-12)
 
 
