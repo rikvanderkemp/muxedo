@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/rikvanderkemp/muxedo/compare/v0.1.11...v0.1.12) (2026-04-12)
+
+
+### Features
+
+* **install:** support go install via module path ([#35](https://github.com/rikvanderkemp/muxedo/issues/35)) ([41db32c](https://github.com/rikvanderkemp/muxedo/commit/41db32c365df572ac139162c31a8d9933f5904f3))
+
 ## [0.1.11](https://github.com/rikvanderkemp/muxedo/compare/v0.1.10...v0.1.11) (2026-04-12)
 
 
