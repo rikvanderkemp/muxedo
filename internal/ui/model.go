@@ -133,6 +133,7 @@ type Model struct {
 
 	messageBuffer    []string
 	showBuffer       bool
+	title            string
 	startupCompleted bool
 	startupSpecs     []profile.StartupSpec
 	startupItems     []startupItem
@@ -175,8 +176,9 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 	}
 }
 
-func NewModelWithSpecs(startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
+func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
 	return Model{
+		title:            title,
 		startupSpecs:     startup,
 		startupItems:     newStartupItems(startup),
 		panelSpecs:       panels,
@@ -219,10 +221,15 @@ func (m Model) emitMsgBlocking(msg tea.Msg) {
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.startupCompleted {
-		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen)
+	windowTitle := "Muxedo"
+	if m.title != "" {
+		windowTitle = "Muxedo - " + m.title
 	}
-	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen)
+
+	if m.startupCompleted {
+		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
+	}
+	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
 }
 
 func (m Model) startupSequence() tea.Msg {

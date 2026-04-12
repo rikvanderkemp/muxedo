@@ -662,7 +662,7 @@ func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
 }
 
 func TestNewModelWithSpecsDefaultsStartupItemsToAsync(t *testing.T) {
-	model := NewModelWithSpecs([]profile.StartupSpec{
+	model := NewModelWithSpecs("test", []profile.StartupSpec{
 		{
 			Command: process.CommandSpec{Program: "echo", Args: []string{"hi"}},
 			Mode:    profile.StartupModeAsync,
@@ -678,7 +678,7 @@ func TestNewModelWithSpecsDefaultsStartupItemsToAsync(t *testing.T) {
 }
 
 func TestStartupBufferShowsStatusRowsAndLogs(t *testing.T) {
-	model := NewModelWithSpecs([]profile.StartupSpec{
+	model := NewModelWithSpecs("test", []profile.StartupSpec{
 		{
 			Command: process.CommandSpec{Program: "echo", Args: []string{"one"}},
 			Mode:    profile.StartupModeAsync,
@@ -705,7 +705,7 @@ func TestStartupBufferShowsStatusRowsAndLogs(t *testing.T) {
 }
 
 func TestStartupTickAdvancesSpinner(t *testing.T) {
-	model := NewModelWithSpecs([]profile.StartupSpec{
+	model := NewModelWithSpecs("test", []profile.StartupSpec{
 		{
 			Command: process.CommandSpec{Program: "echo", Args: []string{"one"}},
 			Mode:    profile.StartupModeAsync,
@@ -724,7 +724,8 @@ func TestStartupTickAdvancesSpinner(t *testing.T) {
 }
 
 func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
-	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil, 
+ profile.ScrollbackConfig{}, DefaultTheme())
 
 	next, cmd := model.Update(StartupCompleteMsg{})
 	model = next.(Model)
@@ -745,7 +746,8 @@ func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
 }
 
 func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
-	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil, 
+ profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
 
@@ -781,7 +783,8 @@ func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
 }
 
 func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T) {
-	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil, 
+ profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
 
@@ -805,7 +808,8 @@ func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T
 }
 
 func TestStartupSequenceCompletesInBubbleTeaProgramWhenQueueStartsFull(t *testing.T) {
-	model := NewModelWithSpecs(nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil, 
+ profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
 
@@ -824,7 +828,7 @@ func TestStartupSequenceCompletesInBubbleTeaProgramWhenQueueStartsFull(t *testin
 }
 
 func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
-	model := NewModelWithSpecs([]profile.StartupSpec{
+	model := NewModelWithSpecs("test", []profile.StartupSpec{
 		{
 			WorkingDir: ".",
 			Command:    process.CommandSpec{Shell: "printf ready\\n"},

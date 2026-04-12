@@ -48,6 +48,7 @@ type ScrollbackConfig struct {
 
 // Profile is parsed muxedo profile configuration.
 type Profile struct {
+	Title      string
 	Panels     []PanelSpec
 	Startup    []StartupSpec
 	Scrollback ScrollbackConfig
@@ -55,6 +56,7 @@ type Profile struct {
 }
 
 type rawProfile struct {
+	Title      string              `toml:"title"`
 	WorkingDir string              `toml:"workingdir"`
 	Startup    []rawStartup        `toml:"startup"`
 	Panel      map[string]rawPanel `toml:"panel"`
@@ -268,7 +270,13 @@ func Load(path string) (Profile, error) {
 		return Profile{}, err
 	}
 
+	title := raw.Title
+	if title == "" {
+		title = RandomName()
+	}
+
 	return Profile{
+		Title:      title,
 		Panels:     panels,
 		Startup:    startup,
 		Scrollback: sb,
