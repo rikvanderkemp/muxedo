@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/rikvanderkemp/muxedo/compare/v0.1.10...v0.1.11) (2026-04-12)
+
+
+### Bug Fixes
+
+* **process:** harden lifecycle and render paths ([#33](https://github.com/rikvanderkemp/muxedo/issues/33)) ([8611e2d](https://github.com/rikvanderkemp/muxedo/commit/8611e2ddc0be92157d54b5f4a4f8299b6b618e42))
+
 ## [0.1.10](https://github.com/rikvanderkemp/muxedo/compare/v0.1.9...v0.1.10) (2026-04-12)
 
 
