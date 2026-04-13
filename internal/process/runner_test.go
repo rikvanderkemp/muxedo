@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestNewPanelIsNotRunning(t *testing.T) {
@@ -246,6 +248,22 @@ func TestDisplayStatePreservesCursorColumnPastText(t *testing.T) {
 	}
 	if len(lines) == 0 || len(lines[0]) < 3 {
 		t.Fatalf("expected output to preserve cursor column, got %q", got.Output)
+	}
+}
+
+func TestDisplayStatePreservesStyledSpaces(t *testing.T) {
+	p := New("test", "echo hi", "", ".")
+	p.termMu.Lock()
+	p.term.Write([]byte("\x1b[48;5;33m    \x1b[0m")) //nolint:errcheck
+	p.termMu.Unlock()
+
+	got := p.DisplayState()
+	line := strings.Split(got.Output, "\n")[0]
+	if width := ansi.StringWidth(ansi.Strip(line)); width < 4 {
+		t.Fatalf("display width = %d, want at least 4; output=%q", width, got.Output)
+	}
+	if !strings.Contains(line, "48;5;33m") {
+		t.Fatalf("expected styled background in output, got %q", got.Output)
 	}
 }
 

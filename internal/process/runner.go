@@ -520,7 +520,7 @@ func (p *Panel) viewStateLocked() DisplayState {
 		for x := 0; x < cols; x++ {
 			glyph := p.term.Cell(x, y)
 			rowGlyphs[x] = glyph
-			if glyph.Char != 0 && glyph.Char != ' ' {
+			if glyphVisible(glyph) {
 				lastNonEmpty = x
 			}
 		}
@@ -555,6 +555,13 @@ func (p *Panel) viewStateLocked() DisplayState {
 			Y:       cur.Y,
 		},
 	}
+}
+
+func glyphVisible(glyph vt10x.Glyph) bool {
+	if glyph.Char != 0 && glyph.Char != ' ' {
+		return true
+	}
+	return glyph.Mode != 0 || glyph.FG != vt10x.DefaultFG || glyph.BG != vt10x.DefaultBG
 }
 
 func writeSGR(b *strings.Builder, fg, bg vt10x.Color) {
