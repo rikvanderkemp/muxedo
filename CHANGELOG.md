@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.14](https://github.com/rikvanderkemp/muxedo/compare/v0.1.13...v0.1.14) (2026-04-13)
+
+
+### Bug Fixes
+
+* **process:** preserve styled terminal snapshot cells ([#39](https://github.com/rikvanderkemp/muxedo/issues/39)) ([b0e0022](https://github.com/rikvanderkemp/muxedo/commit/b0e00229a2264aaacd18f24dc0689e2cf8ea6466))
+
 ## [0.1.13](https://github.com/rikvanderkemp/muxedo/compare/v0.1.12...v0.1.13) (2026-04-12)
 
 
