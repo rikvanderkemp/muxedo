@@ -10,7 +10,9 @@
  \___)=(___/
 ```
 
-A terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.
+`muxedo` is a terminal multiplexer TUI that runs commands from a TOML profile in a live auto-grid layout.
+
+It is built for the "run a few long-lived commands and keep them visible" workflow: app servers, logs, watchers, shells, and project startup tasks in one terminal window.
 
 ## Demo
 
@@ -18,59 +20,7 @@ A terminal multiplexer TUI that runs commands from a TOML profile in a live auto
 
 Recorded demo showing async startup progress in the Message Buffer and a focused panel in insert mode.
 
-## Releases
-
-Official releases use Semantic Versioning tags like `v0.1.0`.
-
-- Patch releases come from merged `fix:` changes.
-- Minor releases come from merged `feat:` changes.
-- Release notes and `CHANGELOG.md` are generated automatically by GitHub.
-- `v1.0.0` is a deliberate maintainer decision and is not emitted automatically.
-
-Pull request titles and commit messages must use Conventional Commit format because release automation depends on them. Use squash merge for releasable changes on `main`; merge commits make `release-please` emit duplicate changelog entries because it sees both the PR commit(s) and the merge commit.
-
-Examples:
-
-- `feat(ui): add panel maximize toggle`
-- `fix(process): stabilize scrollback IDs`
-- `docs(readme): explain release commit conventions`
-
-## Quick start
-
-```bash
-go build -o muxedo .
-./muxedo -profile profile.toml
-./muxedo
-./muxedo -dump-config
-./muxedo -version
-./muxedo update check
-./muxedo update apply
-```
-
-Or run directly:
-
-```bash
-go run . -profile profile.toml
-go run .
-```
-
-When `-profile` is omitted, muxedo looks for `./.muxedo` in the working directory. If that file is not present, muxedo prints the missing-profile error together with the full command help.
-
 ## Install
-
-### Go
-
-Install the latest tagged release with Go:
-
-```bash
-go install github.com/rikvanderkemp/muxedo@latest
-```
-
-Install a specific tagged release:
-
-```bash
-go install github.com/rikvanderkemp/muxedo@v0.1.0
-```
 
 ### Homebrew (macOS and Linux)
 
@@ -81,181 +31,137 @@ brew tap rikvanderkemp/muxedo
 brew install muxedo
 ```
 
-Prefer `brew upgrade muxedo` for updates. The binary can also self-update from GitHub releases; the tap formula may lag briefly until [homebrew-muxedo](https://github.com/rikvanderkemp/homebrew-muxedo) is bumped after each release.
+Use `brew upgrade muxedo` to update later.
+
+### Go
+
+Install the latest tagged release:
+
+```bash
+go install github.com/rikvanderkemp/muxedo@latest
+```
+
+Install a specific release:
+
+```bash
+go install github.com/rikvanderkemp/muxedo@v0.1.0
+```
 
 ### Install script
 
-Install latest Linux/macOS release to `~/.local/bin/muxedo`:
+Install the latest Linux/macOS release to `~/.local/bin/muxedo`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rikvanderkemp/muxedo/main/scripts/install.sh | sh
 ```
 
-Install specific release or custom dir:
+Install a specific release or custom directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rikvanderkemp/muxedo/main/scripts/install.sh | VERSION=v0.1.0 INSTALL_DIR="$HOME/bin" sh
 ```
 
-The installer:
+The installer supports `linux` and `darwin` on `amd64` and `arm64`, verifies the published SHA-256 checksums, and prints a PATH hint if needed.
 
-- supports `linux` and `darwin` on `amd64` and `arm64`
-- downloads the matching GitHub release tarball and `checksums.txt`
-- verifies SHA-256 before installing
-- prints a PATH snippet if the install directory is not already exported
+## First Run
 
-### Manual fallback
+1. Copy the example profile:
 
 ```bash
-VERSION=v0.1.0
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64) ARCH=amd64 ;;
-  aarch64|arm64) ARCH=arm64 ;;
-esac
-curl -fsSLO "https://github.com/rikvanderkemp/muxedo/releases/download/${VERSION}/muxedo_${VERSION#v}_${OS}_${ARCH}.tar.gz"
-tar -xzf "muxedo_${VERSION#v}_${OS}_${ARCH}.tar.gz"
-install -m 755 muxedo "$HOME/.local/bin/muxedo"
+cp profile.toml.example .muxedo
 ```
 
-## Self-update
-
-Official release builds can check for newer GitHub releases and replace themselves in place:
+2. Start muxedo from that directory:
 
 ```bash
-./muxedo update check
-./muxedo update apply
+muxedo
 ```
 
-- `update check` prints current and latest release versions, then reports whether an update is available.
-- `update apply` downloads the matching release tarball for the current OS/architecture, verifies it against the published `checksums.txt`, replaces the current executable, then exits. Restart muxedo after it succeeds.
-- Normal `muxedo` startup also checks for updates by default. In interactive terminals it prompts before startup continues; if you accept, muxedo updates itself and restarts into the new binary automatically.
-- Self-update is unavailable for `dev` builds.
-- Self-update only supports standalone binaries installed from muxedo GitHub release tarballs. Package-manager installs may not be writable or may be managed externally.
-- If the current executable directory is not writable, update apply fails without modifying the existing binary.
+Or point at a profile explicitly:
 
-## Profile format
+```bash
+muxedo -profile profile.toml.example
+```
 
-A profile defines the global environment, startup commands, and the layout of panel processes:
+When `-profile` is omitted, muxedo looks for `./.muxedo` in the current working directory. If no profile is found, it prints the missing-profile error together with the full command help.
+
+## Example Profile
+
+The bundled [profile.toml.example](profile.toml.example) is a safe cross-platform demo. A profile defines optional startup tasks plus one or more panels:
 
 ```toml
-# Global working directory fallback (optional; ~ is expanded)
-workingdir = "~/code/project"
-
-# Commands to run when the TUI starts (optional)
-# Startup items are async by default. Their status and output are streamed
-# to the Message Buffer (Ctrl-B) before and after panels are initialized.
-[[startup]]
-program = "docker"
-args = ["compose", "up", "-d"]
-# workingdir = "." # optional override for this command
+workingdir = "."
 
 [[startup]]
-shell = "make migrate && make seed"
+shell = "printf 'bootstrapping demo...\\n'; sleep 1"
 mode = "sync"
 
-[panel.api]
-# Uses global workingdir fallback
-program = "go"
-args = ["run", "."]
+[panel.clock]
+order = 0
+shell = "while true; do date; sleep 1; done"
 
-[panel.frontend]
-workingdir = "~/code/frontend" # overrides global workingdir
-order = 0                      # optional: lower numbers are shown first
-program = "npm"
-args = ["run", "dev"]
+[panel.system]
+shell = "while true; do uname -a; sleep 5; done"
 
-[panel.logs]
-shell = "docker compose logs -f api | jq -R ."
-shell_kill = "docker compose stop api"
+[panel.echo]
+shell = "printf 'Insert mode demo: type something and press Enter.\\n\\n'; while IFS= read -r line; do printf 'you typed: %s\\n' \"$line\"; done"
 ```
 
-- `workingdir` (top-level) — optional global default for all panels and startup commands.
-- `[[startup]]` — optional array of commands to execute when the application starts. Async items are launched in the background by default; sync items block until they finish. The Message Buffer shows per-item startup status plus streamed logs before and after panel initialization.
-  - `program` — executable to run directly.
-  - `args` — optional argument list used with `program`.
-  - `shell` — optional shell command to run via `sh -c`; use only when you need shell features like pipes, redirects, or `&&`.
-  - `workingdir` — optional working directory for this specific startup command.
-  - `mode` — optional startup mode: `async` (default) or `sync`.
-- `[panel.<name>]` — each section defines a pane:
-  - `workingdir` — working directory for the command.
-  - `order` — optional non-negative integer. Panels with `order` are shown first in ascending order. Panels without `order` keep their TOML file order after the ordered panels.
-  - `program` — executable to run directly.
-  - `args` — optional argument list used with `program`.
-  - `shell` — optional shell command to run via `sh -lc`; use only when you need shell features.
-  - `kill_program` / `kill_args` — optional direct command to run before restarting or exiting the panel.
-  - `shell_kill` — optional explicit shell command to run before restarting or exiting the panel.
+Profile rules:
 
-Exactly one of `program` or `shell` is required for each startup command and panel. Legacy `cmd` / `cmd_kill` fields are no longer supported.
+- Use `[[startup]]` for one-off setup commands that run before or alongside the UI.
+- Use `[panel.<name>]` for long-lived commands you want visible in the grid.
+- Set exactly one of `program` or `shell` for each startup item and panel.
+- Use `workingdir` at the top level as the default directory, then override per startup item or panel when needed.
+- Use `order` to pin a panel earlier in the grid without rearranging the file.
 
-Shell fields are intentionally explicit and should be treated as trusted local automation because they execute through `sh`.
-Anyone who can edit the profile can run arbitrary commands on the host—treat the profile file like executable code and restrict who can change it.
-
-Panels are arranged in an auto-grid (near-square) layout that fills the terminal and resizes when the window changes.
-By default, panel numbering and placement follow the order of `[panel.*]` sections in the profile. Use `order` when a specific panel should take precedence without rearranging the rest of the file.
+Shell fields execute via `sh`, so treat profile files as trusted local automation.
 
 ## Controls
 
-- Left click a panel — activate/focus that panel.
-- **Panel numbers** — each pane title shows **`[1] name`**, **`[2] name`**, … (1-based). The status bar shows the active panel the same way.
-- **Jump by number** — with **no panel focused** or in **normal** mode (focused, not insert/scroll), press **`1`**–**`9`** to focus that panel (first nine only). In **insert** mode, digits are sent to the process.
-- **Grid motion** — in **normal** mode, **`h`** **`j`** **`k`** **`l`** move focus to the adjacent panel in the auto-grid (left / down / up / right). No move if there is no neighbor in that direction. In **scroll** mode, **`j`** / **`k`** still move the scrollback line; use **Esc** to return to normal, then **`hjkl`** to change panels.
-- **Vim-style panel modes** (after you focus a panel, you start in **normal** mode):
-  - **`i`** or **`I`** — **insert** mode: keys (including `q`, `Ctrl+C`, etc.) are sent to the panel process, like a typical focused terminal.
-  - **`z`** or **`Z`** — **scroll** mode: the panel becomes a read-only scrollback viewer with a line cursor and optional mark.
-  - **`v`** or **`V`** — **select** mode: drag with the left mouse button to select panel text. From normal mode this selects from the visible screen; from scroll mode it selects from the current history viewport.
-  - **`Esc`** — **trickle**: from insert, first **`Esc`** returns to **normal**; from **normal**, **`Esc`** unfocuses the panel. (**`Ctrl+[`** is the same byte as **`Esc`** in a TTY, so it follows the same rule.)
-  - In **normal** mode: **`m`** / **`M`** toggles maximize for the focused panel; **`r`** / **`R`** reloads (restarts) the panel command. Other keys are not sent to the panel.
-- In **scroll** mode:
-  - **`PgUp`** / **`PgDn`** or mouse wheel — move the viewport.
-  - **`j`** / **`k`** or **Up** / **Down** — move the selected line.
-  - **`g`** / **`G`** — jump to oldest history / live bottom.
-  - **`m`** — toggle a persistent mark on the selected line.
-  - **`Esc`** — leave scroll mode and return to normal mode.
-- In **select** mode:
-  - Left mouse drag — create or extend the selection inside the active panel.
-  - **`Enter`** or **`y`** — copy the selected text to the clipboard.
-  - **`Esc`** — leave select mode and return to the previous mode.
-- While a panel is maximized, **`hjkl`** and **`1`**–**`9`** keep the single-panel view and switch which panel is shown.
-- Pressing **`Esc`** from maximized **normal** mode restores the grid and clears focus.
-- When a panel process exits, the panel shows a "Press R to reload" overlay. In **normal** mode, press **`R`** (or **`r`**) to restart the command.
-- **`q`** or **`Ctrl+C`** — quit and stop all subprocesses (only when no panel is active).
-- **`Ctrl+B`** — toggle the **Message Buffer** at any time to see logs and startup progress.
+The shortest path to using muxedo:
 
-## Scrollback
+- Click a panel to focus it.
+- Press `i` to enter insert mode and send keys to the running process.
+- Press `Esc` once to return to normal mode, then `Esc` again to unfocus the panel.
+- Press `h` `j` `k` `l` in normal mode to move between panels.
+- Press `1` to `9` in normal mode to jump to the first nine panels.
+- Press `z` in a focused panel to inspect scrollback.
+- Press `v` in a focused panel to select and copy text.
+- Press `r` in normal mode to restart the focused panel.
+- Press `m` in normal mode to maximize or restore the focused panel.
+- Press `Ctrl+B` to toggle the Message Buffer.
+- Press `q` or `Ctrl+C` to quit when no panel is focused.
 
-Each panel's output history is captured to a log file on disk. When the terminal scrolls, lines that leave the top of the screen are appended to the panel's scrollback file.
+## Scrollback and Clipboard
 
-Scrollback starts empty on each muxedo launch, so in-panel scrolling only shows the current app run.
+Muxedo captures each panel's output to a scrollback file for the current run. Scrollback starts empty on launch, grows while the panel runs, and is cleared when that panel is restarted with `R`.
 
-Focused panels can also enter **scroll** mode with `**z`** to inspect that history in place. Scroll mode merges the current visible screen with the existing file-backed scrollback, so it works best for shells and log output and remains best-effort for full-screen TUIs.
+Scrollback mode is best-effort for full-screen TUIs and works best with shells, logs, and line-oriented output.
 
-Focused panels can enter **select** mode with `**v`** to copy text. Muxedo tries the OS clipboard first (`pbcopy`, `wl-copy`, `xclip`, `xsel`) and falls back to OSC52 terminal clipboard copy when available.
+Select mode copies text to the system clipboard when one of these tools is available: `pbcopy`, `wl-copy`, `xclip`, or `xsel`. If none are available, muxedo falls back to OSC52 terminal clipboard copy when supported.
 
-The editor is no longer used for scrollback viewing.
-
-Add an optional `[scrollback]` section to your config to customise behaviour:
+Optional scrollback settings:
 
 ```toml
 [scrollback]
-dir = "~/.cache/muxedo/scrollback"   # where log files are stored (default: OS cache dir)
-max_bytes = 1048576                   # max size per panel file in bytes; 0 = unlimited (default: 1 MiB)
+dir = "~/.cache/muxedo/scrollback"
+max_bytes = 1048576
 ```
 
-Restarting a panel (`R`) clears its scrollback file. Resizing the terminal resets the internal snapshot used for scroll detection but keeps the existing file for the current run.
+`dir` defaults to the OS cache directory. `max_bytes` defaults to `1 MiB` per panel, and `0` means unlimited.
 
-Note: scrollback capture works best with log-style and shell output. Full-screen TUI programs that redraw the entire screen may not produce meaningful scrollback history.
-
-## Muxedo config
+## App Config
 
 Muxedo also looks for an optional app-level config at `~/.config/muxedo/config.toml`.
 
-If that file is missing, muxedo still starts normally. The process/panel definition does not belong in this file; that stays in the launch profile from `-profile` or the implicit `./.muxedo` fallback.
+That file is for muxedo behavior, not for your panel layout. To generate a complete config file with defaults, run:
 
-To generate a complete config file with every app-level option set to its default value, run `./muxedo -dump-config`. This creates the parent directory if needed and refuses to overwrite an existing file unless you also pass `-force`.
+```bash
+muxedo -dump-config
+```
 
-Use the `[ui]` section for app-level behavior toggles:
+Useful app-level options:
 
 ```toml
 [ui]
@@ -264,9 +170,9 @@ check_updates_on_start = true
 ```
 
 - `show_exit_message` controls the support message printed after muxedo exits.
-- `check_updates_on_start` controls the default-on startup self-update check. In non-interactive sessions, muxedo skips the prompt and starts normally.
+- `check_updates_on_start` controls the default-on startup update check. In non-interactive sessions, muxedo skips the prompt and starts normally.
 
-You can also add a `[theme]` section to override the UI colors. Hex values are the intended format for themers, and muxedo will let the terminal renderer degrade them automatically on lower-color terminals. ANSI numeric strings still work too.
+You can also override UI colors with a `[theme]` section:
 
 ```toml
 [theme]
@@ -301,12 +207,37 @@ status_hint_fg = "#d0d0d0"
 status_hint_bg = "#444444"
 ```
 
+## Self-Update
+
+Official release builds can check for newer GitHub releases and replace themselves in place:
+
+```bash
+muxedo update check
+muxedo update apply
+```
+
+- `update check` prints the current and latest release versions.
+- `update apply` downloads the matching release tarball, verifies `checksums.txt`, replaces the current executable, then exits.
+- Startup checks for updates by default in interactive terminals and prompts before continuing.
+- Self-update is unavailable for `dev` builds.
+- Package-manager installs may not be writable or may be managed externally.
+
+## Contributing
+
+Pull request titles and commit messages must use Conventional Commit format:
+
+- `feat(ui): add panel maximize toggle`
+- `fix(process): stabilize scrollback IDs`
+- `docs(readme): improve first-run guide`
+
+This repository uses squash merges on `main` for release automation.
+
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT - see [LICENSE](LICENSE) for details.
 
 ## Support
 
 If muxedo saves you time, you can support development here:
 
-<a href="https://www.buymeacoffee.com/rikvanderkemp" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+<a href="https://www.buymeacoffee.com/rikvanderkemp" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;"></a>

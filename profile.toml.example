@@ -5,23 +5,23 @@ workingdir = "."
 # Startup items are async by default; set mode = "sync" to block on one.
 # Their status and output are streamed to the Message Buffer (view with Ctrl-B).
 [[startup]]
-program = "sleep"
-args = ["2"]
-workingdir = "." # optional: defaults to the global 'workingdir', then to muxedo's launch directory
-
-[[startup]]
-shell = "printf 'warming up demo services\\n'; sleep 3"
+shell = "printf 'bootstrapping demo...\\n'; sleep 1"
 mode = "sync"
 
-[panel.pong]
+[[startup]]
+program = "sleep"
+args = ["2"]
+# workingdir = "." # optional: defaults to the global 'workingdir', then to muxedo's launch directory
+
+[panel.clock]
 order = 0
+shell = "while true; do date; sleep 1; done"
+
+[panel.system]
+shell = "while true; do uname -a; sleep 5; done"
+
+[panel.pong]
 shell = "i=0 d=1; while true; do printf '\\r[%*s><%*s]' \"$i\" '' \"$((20-i))\" ''; sleep 0.08; [ \"$i\" -eq 20 ] && d=-1; [ \"$i\" -eq 0 ] && d=1; i=$((i+d)); done"
-
-[panel.processes]
-shell = "while true; do ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 8; sleep 5; done"
-
-[panel.metrics]
-shell = "while true; do printf 'loadavg '; cut -d ' ' -f1-3 /proc/loadavg; printf 'memavail '; grep MemAvailable /proc/meminfo; sleep 10; done"
 
 [panel.echo]
 shell = "printf 'Insert mode demo: type something and press Enter.\\n\\n'; while IFS= read -r line; do printf 'you typed: %s\\n' \"$line\"; done"
