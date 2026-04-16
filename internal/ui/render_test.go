@@ -219,6 +219,22 @@ func TestRenderPaneShowsSelectModeTitle(t *testing.T) {
 	}
 }
 
+func TestRenderPaneActiveStoppedUsesActiveBorder(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(oldProfile)
+	})
+
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, true, false, false, false, nil, "1s")
+	if !strings.Contains(pane, "38;2;255;135;0") {
+		t.Fatalf("expected active border color escape in %q", pane)
+	}
+	if strings.Contains(pane, "38;2;88;88;88") {
+		t.Fatalf("expected stopped border color to be replaced when active, got %q", pane)
+	}
+}
+
 func TestFitViewportLinesHighlightsSelectedColumns(t *testing.T) {
 	oldProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
