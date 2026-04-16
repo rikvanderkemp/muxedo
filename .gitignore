@@ -1,3 +1,5 @@
 muxedo
 config.toml
+
+# Compiled `go test -c` binaries.
 *.test
