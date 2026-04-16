@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.15](https://github.com/rikvanderkemp/muxedo/compare/v0.1.14...v0.1.15) (2026-04-16)
+
+
+### Bug Fixes
+
+* **ui:** activate focused panel border ([#41](https://github.com/rikvanderkemp/muxedo/issues/41)) ([d7381b7](https://github.com/rikvanderkemp/muxedo/commit/d7381b724683f3d2ff3808a3f9292c81755642e5))
+
 ## [0.1.14](https://github.com/rikvanderkemp/muxedo/compare/v0.1.13...v0.1.14) (2026-04-13)
 
 
