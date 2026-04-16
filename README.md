@@ -103,6 +103,9 @@ shell = "while true; do date; sleep 1; done"
 [panel.system]
 shell = "while true; do uname -a; sleep 5; done"
 
+[panel.pong]
+shell = "i=0 d=1; while true; do printf '\\r[%*s><%*s]' \"$i\" '' \"$((20-i))\" ''; sleep 0.08; [ \"$i\" -eq 20 ] && d=-1; [ \"$i\" -eq 0 ] && d=1; i=$((i+d)); done"
+
 [panel.echo]
 shell = "printf 'Insert mode demo: type something and press Enter.\\n\\n'; while IFS= read -r line; do printf 'you typed: %s\\n' \"$line\"; done"
 ```
@@ -129,6 +132,7 @@ The shortest path to using muxedo:
 - Press `z` in a focused panel to inspect scrollback.
 - Press `v` in a focused panel to select and copy text.
 - Press `r` in normal mode to restart the focused panel.
+- Press `x` in normal mode to stop the focused panel and run its optional kill command.
 - Press `m` in normal mode to maximize or restore the focused panel.
 - Press `Ctrl+B` to toggle the Message Buffer.
 - Press `q` or `Ctrl+C` to quit when no panel is focused.
@@ -150,6 +154,8 @@ max_bytes = 1048576
 ```
 
 `dir` defaults to the OS cache directory. `max_bytes` defaults to `1 MiB` per panel, and `0` means unlimited.
+
+Restarting a panel with `R` clears that panel's scrollback file for the current run.
 
 ## App Config
 

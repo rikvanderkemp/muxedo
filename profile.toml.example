@@ -1,9 +1,7 @@
-# Global working directory fallback for all panels and startup commands (optional)
+# muxedo example profile
+title = "Muxedo Demo"
 workingdir = "."
 
-# Commands to run when the TUI starts.
-# Startup items are async by default; set mode = "sync" to block on one.
-# Their status and output are streamed to the Message Buffer (view with Ctrl-B).
 [[startup]]
 shell = "printf 'bootstrapping demo...\\n'; sleep 1"
 mode = "sync"
@@ -11,7 +9,6 @@ mode = "sync"
 [[startup]]
 program = "sleep"
 args = ["2"]
-# workingdir = "." # optional: defaults to the global 'workingdir', then to muxedo's launch directory
 
 [panel.clock]
 order = 0
@@ -25,8 +22,3 @@ shell = "i=0 d=1; while true; do printf '\\r[%*s><%*s]' \"$i\" '' \"$((20-i))\" 
 
 [panel.echo]
 shell = "printf 'Insert mode demo: type something and press Enter.\\n\\n'; while IFS= read -r line; do printf 'you typed: %s\\n' \"$line\"; done"
-
-# Optional [scrollback] — omit this section to use defaults (dir: OS cache / muxedo / scrollback; max_bytes: 1 MiB per panel)
-# [scrollback]
-# dir = "~/.cache/muxedo/scrollback"   # log file directory (~ expanded)
-# max_bytes = 1048576                  # per-panel cap in bytes; 0 = unlimited
