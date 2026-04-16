@@ -727,8 +727,8 @@ func TestStartupTickAdvancesSpinner(t *testing.T) {
 }
 
 func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil, 
- profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil,
+		profile.ScrollbackConfig{}, DefaultTheme())
 
 	next, cmd := model.Update(StartupCompleteMsg{})
 	model = next.(Model)
@@ -749,8 +749,8 @@ func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
 }
 
 func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil, 
- profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil,
+		profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
 
@@ -786,8 +786,8 @@ func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
 }
 
 func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil, 
- profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil,
+		profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
 
@@ -811,8 +811,8 @@ func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T
 }
 
 func TestStartupSequenceCompletesInBubbleTeaProgramWhenQueueStartsFull(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil, 
- profile.ScrollbackConfig{}, DefaultTheme())
+	model := NewModelWithSpecs("test", nil, nil,
+		profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
 
@@ -948,6 +948,14 @@ func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
 }
 
 func TestGlobalQuitSchedulesDelayedCloseAfterFinalPanel(t *testing.T) {
+	prev := newExitDelayCmd
+	newExitDelayCmd = func() tea.Cmd {
+		return func() tea.Msg { return exitDelayMsg{} }
+	}
+	t.Cleanup(func() {
+		newExitDelayCmd = prev
+	})
+
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -1019,6 +1027,23 @@ func TestUpdateInactiveQQuits(t *testing.T) {
 
 	if !teaModel.(Model).exiting {
 		t.Fatalf("expected model to be in exiting state")
+	}
+}
+
+func TestUpdateInactiveQQuitsWithNoPanels(t *testing.T) {
+	model := NewModel(nil)
+
+	teaModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("expected quit command with no panels")
+	}
+
+	got := teaModel.(Model)
+	if !got.exiting {
+		t.Fatal("expected model to be in exiting state")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("cmd() = %#v, want tea.QuitMsg", cmd())
 	}
 }
 
@@ -1673,9 +1698,6 @@ func TestXShortcutKillsPanel(t *testing.T) {
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	model = next.(Model)
 
-	if model.killingPanel {
-		t.Fatal("expected killingPanel state to remain false")
-	}
 	if !model.panelStopping[0] {
 		t.Fatal("expected panelStopping true after x")
 	}
@@ -1747,6 +1769,14 @@ func TestXShortcutIgnoresRepeatAndBlocksRestartWhileStopping(t *testing.T) {
 }
 
 func TestQuitWhilePanelAlreadyStoppingDoesNotDoubleCount(t *testing.T) {
+	prev := newExitDelayCmd
+	newExitDelayCmd = func() tea.Cmd {
+		return func() tea.Msg { return exitDelayMsg{} }
+	}
+	t.Cleanup(func() {
+		newExitDelayCmd = prev
+	})
+
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})

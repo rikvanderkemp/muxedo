@@ -87,6 +87,12 @@ const msgChanBufferSize = 256
 const msgSendTimeout = 100 * time.Millisecond
 const exitDialogDelay = 350 * time.Millisecond
 
+var newExitDelayCmd = func() tea.Cmd {
+	return tea.Tick(exitDialogDelay, func(time.Time) tea.Msg {
+		return exitDelayMsg{}
+	})
+}
+
 func newMsgChan() chan tea.Msg {
 	return make(chan tea.Msg, msgChanBufferSize)
 }
@@ -104,12 +110,6 @@ func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
 			status:    status,
 		}
 	}
-}
-
-func exitDialogDelayCmd() tea.Cmd {
-	return tea.Tick(exitDialogDelay, func(time.Time) tea.Msg {
-		return exitDelayMsg{}
-	})
 }
 
 func formatExitLogStart(panelName string) string {
@@ -153,11 +153,7 @@ type Model struct {
 	exitReceived     []bool
 	exitCompleted    int
 	exitDelayPending bool
-
-	killingPanel    bool
-	killingPanelIdx int
-	killStatus      string
-	panelStopping   []bool
+	panelStopping    []bool
 
 	messageBuffer    []string
 	showBuffer       bool
@@ -444,24 +440,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.waitForMsg
 	}
 
-	if m.killingPanel {
-		switch msg := msg.(type) {
-		case exitProgressMsg:
-			if msg.panelIdx == m.killingPanelIdx {
-				m.killStatus = msg.status
-				// We don't immediately return m, nil here because we want to show the "exiting completed" state briefly
-				// But according to the plan, we deactivate the window.
-				// Let's stick to the plan for now: deactivate and stop showing dialog.
-				m.killingPanel = false
-				m.killingPanelIdx = -1
-				m.activePanel = -1
-				return m, nil
-			}
-		}
-		// Ignore other messages while killing a panel
-		return m, nil
-	}
-
 	if m.exiting {
 		switch msg := msg.(type) {
 		case exitProgressMsg:
@@ -477,7 +455,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.exitCompleted == len(m.panels) && !m.exitDelayPending {
 				m.exitDelayPending = true
-				return m, exitDialogDelayCmd()
+				return m, newExitDelayCmd()
 			}
 			return m, nil
 		case exitDelayMsg:
@@ -582,25 +560,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.resizePanels()
 					return m, nil
 				}
-			if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-				switch msg.Runes[0] {
-				case 'i', 'I':
-					m.panelInsertMode = true
-				case 'm', 'M':
+				if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
+					switch msg.Runes[0] {
+					case 'i', 'I':
+						m.panelInsertMode = true
+					case 'm', 'M':
 						m.toggleMaximized()
 					case 'z', 'Z':
 						m.enterScrollMode()
-				case 'v', 'V':
-					m.enterSelectMode()
-				case 'x', 'X':
-					if m.activePanel >= 0 && m.activePanel < len(m.panelStopping) && m.panelStopping[m.activePanel] {
-						return m, nil
+					case 'v', 'V':
+						m.enterSelectMode()
+					case 'x', 'X':
+						if m.activePanel >= 0 && m.activePanel < len(m.panelStopping) && m.panelStopping[m.activePanel] {
+							return m, nil
+						}
+						m.panelStopping[m.activePanel] = true
+						m.messageBuffer = append(m.messageBuffer, formatExitLogStart(p.Name))
+						return m, killPanelCmd(m.activePanel, p)
 					}
-					m.panelStopping[m.activePanel] = true
-					m.messageBuffer = append(m.messageBuffer, formatExitLogStart(p.Name))
-					return m, killPanelCmd(m.activePanel, p)
 				}
-			}
 				return m, nil
 			}
 
@@ -678,6 +656,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.exitCompleted = 0
 			m.exitDelayPending = false
 			m.panelStopping = resizeBoolSlice(m.panelStopping, len(m.panels))
+			if len(m.panels) == 0 {
+				return m, tea.Quit
+			}
 			var cmds []tea.Cmd
 			for i, p := range m.panels {
 				m.exitStatuses[i] = "stopping..."
@@ -892,14 +873,11 @@ func (m Model) View() string {
 }
 
 func (m Model) wrapExiting(body string) string {
-	if !m.exiting && !m.killingPanel {
+	if !m.exiting {
 		return body
 	}
 
 	content := m.renderExitDialog()
-	if m.killingPanel {
-		content = m.killStatus
-	}
 
 	dialogBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
