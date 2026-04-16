@@ -63,9 +63,12 @@ type startupLogMsg struct {
 	line string
 }
 
+type exitDelayMsg struct{}
+
 type exitProgressMsg struct {
-	panelIdx int
-	status   string
+	panelIdx  int
+	panelName string
+	status    string
 }
 
 type panelSelection struct {
@@ -82,6 +85,7 @@ type panelSelection struct {
 const maxStartupLogLineBytes = 1 << 20 // 1 MiB
 const msgChanBufferSize = 256
 const msgSendTimeout = 100 * time.Millisecond
+const exitDialogDelay = 350 * time.Millisecond
 
 func newMsgChan() chan tea.Msg {
 	return make(chan tea.Msg, msgChanBufferSize)
@@ -89,16 +93,37 @@ func newMsgChan() chan tea.Msg {
 
 func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
 	return func() tea.Msg {
-		status := fmt.Sprintf("exiting panel %s.... exiting completed...", p.Name)
+		status := "stopped"
 		if err := p.RunCmdKill(); err != nil {
-			status = fmt.Sprintf("exiting panel %s.... kill command failed: %v. exiting completed...", p.Name, err)
+			status = fmt.Sprintf("kill command failed: %v", err)
 		}
 		p.Stop()
 		return exitProgressMsg{
-			panelIdx: idx,
-			status:   status,
+			panelIdx:  idx,
+			panelName: p.Name,
+			status:    status,
 		}
 	}
+}
+
+func exitDialogDelayCmd() tea.Cmd {
+	return tea.Tick(exitDialogDelay, func(time.Time) tea.Msg {
+		return exitDelayMsg{}
+	})
+}
+
+func formatExitLogStart(panelName string) string {
+	return fmt.Sprintf("exiting panel %s....", panelName)
+}
+
+func formatExitLogResult(panelName, status string) string {
+	return fmt.Sprintf("exiting panel %s.... %s", panelName, status)
+}
+
+func resizeBoolSlice(prev []bool, n int) []bool {
+	out := make([]bool, n)
+	copy(out, prev)
+	return out
 }
 
 type Model struct {
@@ -125,11 +150,14 @@ type Model struct {
 	copySelection    func(string) error
 	exiting          bool
 	exitStatuses     []string
+	exitReceived     []bool
 	exitCompleted    int
+	exitDelayPending bool
 
 	killingPanel    bool
 	killingPanelIdx int
 	killStatus      string
+	panelStopping   []bool
 
 	messageBuffer    []string
 	showBuffer       bool
@@ -154,6 +182,7 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 		grid:             layout.Compute(len(panels)),
 		activePanel:      -1,
 		maximizedPanel:   -1,
+		panelStopping:    make([]bool, len(panels)),
 		startupCompleted: true,
 		scrollbackConfig: profile.ScrollbackConfig{},
 		msgChan:          newMsgChan(),
@@ -188,6 +217,7 @@ func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []pro
 		grid:             layout.Compute(len(panels)),
 		activePanel:      -1,
 		maximizedPanel:   -1,
+		panelStopping:    make([]bool, len(panels)),
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -407,6 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.waitForMsg
 	case StartupCompleteMsg:
 		m.panels = msg.panels
+		m.panelStopping = make([]bool, len(msg.panels))
 		m.startupCompleted = true
 		m.showBuffer = false
 		m.resizePanels()
@@ -434,9 +465,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.exiting {
 		switch msg := msg.(type) {
 		case exitProgressMsg:
-			m.exitStatuses[msg.panelIdx] = msg.status
-			m.exitCompleted++
-			if m.exitCompleted == len(m.panels) {
+			if msg.panelIdx >= 0 && msg.panelIdx < len(m.exitStatuses) {
+				m.exitStatuses[msg.panelIdx] = msg.status
+			}
+			if msg.panelIdx >= 0 && msg.panelIdx < len(m.panelStopping) {
+				m.panelStopping[msg.panelIdx] = false
+			}
+			if msg.panelIdx >= 0 && msg.panelIdx < len(m.exitReceived) && !m.exitReceived[msg.panelIdx] {
+				m.exitReceived[msg.panelIdx] = true
+				m.exitCompleted++
+			}
+			if m.exitCompleted == len(m.panels) && !m.exitDelayPending {
+				m.exitDelayPending = true
+				return m, exitDialogDelayCmd()
+			}
+			return m, nil
+		case exitDelayMsg:
+			if m.exitDelayPending && m.exitCompleted == len(m.panels) {
 				return m, tea.Quit
 			}
 			return m, nil
@@ -446,6 +491,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case exitProgressMsg:
+		if msg.panelIdx >= 0 && msg.panelIdx < len(m.panelStopping) {
+			m.panelStopping[msg.panelIdx] = false
+		}
+		m.messageBuffer = append(m.messageBuffer, formatExitLogResult(msg.panelName, msg.status))
+		if msg.panelIdx == m.activePanel {
+			m.activePanel = -1
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+b" {
 			m.showBuffer = !m.showBuffer
@@ -528,23 +582,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.resizePanels()
 					return m, nil
 				}
-				if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-					switch msg.Runes[0] {
-					case 'i', 'I':
-						m.panelInsertMode = true
-					case 'm', 'M':
+			if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
+				switch msg.Runes[0] {
+				case 'i', 'I':
+					m.panelInsertMode = true
+				case 'm', 'M':
 						m.toggleMaximized()
 					case 'z', 'Z':
 						m.enterScrollMode()
-					case 'v', 'V':
-						m.enterSelectMode()
-					case 'x', 'X':
-						m.killingPanel = true
-						m.killingPanelIdx = m.activePanel
-						m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
-						return m, killPanelCmd(m.activePanel, p)
+				case 'v', 'V':
+					m.enterSelectMode()
+				case 'x', 'X':
+					if m.activePanel >= 0 && m.activePanel < len(m.panelStopping) && m.panelStopping[m.activePanel] {
+						return m, nil
 					}
+					m.panelStopping[m.activePanel] = true
+					m.messageBuffer = append(m.messageBuffer, formatExitLogStart(p.Name))
+					return m, killPanelCmd(m.activePanel, p)
 				}
+			}
 				return m, nil
 			}
 
@@ -594,15 +650,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.enterSelectMode()
 					return m, nil
 				case 'r', 'R':
+					if m.activePanel >= 0 && m.activePanel < len(m.panelStopping) && m.panelStopping[m.activePanel] {
+						return m, nil
+					}
 					if err := m.restartPanel(p); err != nil {
 						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
 					}
 					m.resizePanels()
 					return m, nil
 				case 'x', 'X':
-					m.killingPanel = true
-					m.killingPanelIdx = m.activePanel
-					m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
+					if m.activePanel >= 0 && m.activePanel < len(m.panelStopping) && m.panelStopping[m.activePanel] {
+						return m, nil
+					}
+					m.panelStopping[m.activePanel] = true
+					m.messageBuffer = append(m.messageBuffer, formatExitLogStart(p.Name))
 					return m, killPanelCmd(m.activePanel, p)
 				}
 			}
@@ -613,9 +674,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.exiting = true
 			m.exitStatuses = make([]string, len(m.panels))
+			m.exitReceived = make([]bool, len(m.panels))
+			m.exitCompleted = 0
+			m.exitDelayPending = false
+			m.panelStopping = resizeBoolSlice(m.panelStopping, len(m.panels))
 			var cmds []tea.Cmd
 			for i, p := range m.panels {
-				m.exitStatuses[i] = fmt.Sprintf("exiting panel %s....", p.Name)
+				m.exitStatuses[i] = "stopping..."
+				if m.panelStopping[i] {
+					continue
+				}
+				m.panelStopping[i] = true
 				cmds = append(cmds, killPanelCmd(i, p))
 			}
 			return m, tea.Batch(cmds...)
@@ -827,7 +896,7 @@ func (m Model) wrapExiting(body string) string {
 		return body
 	}
 
-	content := strings.Join(m.exitStatuses, "\n")
+	content := m.renderExitDialog()
 	if m.killingPanel {
 		content = m.killStatus
 	}
@@ -835,11 +904,42 @@ func (m Model) wrapExiting(body string) string {
 	dialogBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
-		Padding(1, 3).
-		Align(lipgloss.Center).
+		Padding(1, 2).
+		Align(lipgloss.Left).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialogBox)
+}
+
+func (m Model) renderExitDialog() string {
+	if len(m.exitStatuses) == 0 {
+		return "Shutting down..."
+	}
+
+	title := "Shutting down panels"
+	if m.exitCompleted == len(m.exitStatuses) {
+		title = "Shutdown complete"
+	}
+
+	labels := make([]string, len(m.exitStatuses))
+	labelWidth := 0
+	for i := range m.exitStatuses {
+		name := fmt.Sprintf("[%d] %s", i+1, m.panels[i].Name)
+		labels[i] = name
+		if w := lipgloss.Width(name); w > labelWidth {
+			labelWidth = w
+		}
+	}
+
+	labelStyle := lipgloss.NewStyle().Bold(true).Width(labelWidth)
+	lines := []string{lipgloss.NewStyle().Bold(true).Render(title), ""}
+	for i, status := range m.exitStatuses {
+		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, labelStyle.Render(labels[i]), "  ", status))
+	}
+	if m.exitCompleted == len(m.exitStatuses) {
+		lines = append(lines, "", "Closing...")
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (m Model) statusModeLabel() string {
