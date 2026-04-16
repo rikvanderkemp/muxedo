@@ -107,16 +107,6 @@ func renderPane(theme Theme, title string, output process.DisplayState, width, h
 	var borderRenderer lipgloss.Style
 	var titleSeparatorRenderer lipgloss.Style
 	switch {
-	case stopped:
-		titleRenderer = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(theme.color(theme.StoppedTitleFG)).
-			Background(theme.color(theme.StoppedTitleBG)).
-			Padding(0, 1)
-		borderRenderer = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(theme.color(theme.StoppedBorder))
-		titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.StoppedTitleBG))
 	case active:
 		if insertMode {
 			titleRenderer = lipgloss.NewStyle().
@@ -139,6 +129,16 @@ func renderPane(theme Theme, title string, output process.DisplayState, width, h
 				BorderForeground(theme.color(theme.ActiveNormalBorder))
 			titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.ActiveNormalTitleBG))
 		}
+	case stopped:
+		titleRenderer = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(theme.color(theme.StoppedTitleFG)).
+			Background(theme.color(theme.StoppedTitleBG)).
+			Padding(0, 1)
+		borderRenderer = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(theme.color(theme.StoppedBorder))
+		titleSeparatorRenderer = lipgloss.NewStyle().Foreground(theme.color(theme.StoppedTitleBG))
 	default:
 		titleRenderer = lipgloss.NewStyle().
 			Bold(true).
