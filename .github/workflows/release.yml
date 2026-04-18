@@ -36,6 +36,38 @@ jobs:
             exit 1
           fi
 
+      - name: Guard release metadata
+        run: |
+          latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          manifest_version="$(jq -r '."."' .release-please-manifest.json)"
+          changelog_version="$(sed -nE 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*/\1/p' CHANGELOG.md | head -n1)"
+
+          if [[ -z "$manifest_version" ]]; then
+            echo "release manifest is missing a root package version"
+            exit 1
+          fi
+
+          if [[ -z "$changelog_version" ]]; then
+            echo "CHANGELOG.md is missing a top-level release entry"
+            exit 1
+          fi
+
+          if [[ "$manifest_version" != "$changelog_version" ]]; then
+            echo "release manifest version $manifest_version does not match top changelog entry $changelog_version"
+            exit 1
+          fi
+
+          if [[ -n "$latest_tag" ]]; then
+            latest_version="${latest_tag#v}"
+            greatest_version="$(printf '%s\n%s\n' "$latest_version" "$manifest_version" | sort -V | tail -n1)"
+            if [[ "$greatest_version" != "$manifest_version" ]]; then
+              echo "release metadata regressed below latest tag $latest_tag"
+              echo "manifest version: $manifest_version"
+              echo "changelog version: $changelog_version"
+              exit 1
+            fi
+          fi
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:
