@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.17](https://github.com/rikvanderkemp/muxedo/compare/v0.1.16...v0.1.17) (2026-04-18)
+
+
+### Features
+
+* **welcome:** add interactive first-run profile wizard ([#50](https://github.com/rikvanderkemp/muxedo/issues/50)) ([76530ef](https://github.com/rikvanderkemp/muxedo/commit/76530efcf525b0c067a508401757e7755fe30165))
+
+
+### Bug Fixes
+
+* **release:** restore 0.1.16 release metadata ([#52](https://github.com/rikvanderkemp/muxedo/issues/52)) ([f8a0d2c](https://github.com/rikvanderkemp/muxedo/commit/f8a0d2cd4ca10d07566c0bd3ba1df74de24c21da))
+
 ## [0.1.16](https://github.com/rikvanderkemp/muxedo/compare/v0.1.15...v0.1.16) (2026-04-16)
 
 
