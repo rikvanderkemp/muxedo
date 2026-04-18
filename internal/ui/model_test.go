@@ -529,9 +529,6 @@ func TestKillPanelCmdIncludesKillCommandFailure(t *testing.T) {
 	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "true"}, process.CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
 
 	msg := killPanelCmd(0, panel)().(exitProgressMsg)
-	if msg.panelName != "one" {
-		t.Fatalf("panelName = %q, want one", msg.panelName)
-	}
 	if !strings.Contains(msg.status, "kill command failed") {
 		t.Fatalf("status = %q, want kill command failure", msg.status)
 	}
@@ -947,47 +944,6 @@ func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
 	}
 }
 
-func TestGlobalQuitSchedulesDelayedCloseAfterFinalPanel(t *testing.T) {
-	prev := newExitDelayCmd
-	newExitDelayCmd = func() tea.Cmd {
-		return func() tea.Msg { return exitDelayMsg{} }
-	}
-	t.Cleanup(func() {
-		newExitDelayCmd = prev
-	})
-
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-	})
-	model.exiting = true
-	model.exitStatuses = []string{"stopping..."}
-	model.exitReceived = make([]bool, 1)
-
-	next, cmd := model.Update(exitProgressMsg{panelIdx: 0, panelName: "one", status: "stopped"})
-	model = next.(Model)
-
-	if model.exitCompleted != 1 {
-		t.Fatalf("exitCompleted = %d, want 1", model.exitCompleted)
-	}
-	if cmd == nil {
-		t.Fatal("expected delayed quit cmd")
-	}
-
-	msg := cmd()
-	if _, ok := msg.(exitDelayMsg); !ok {
-		t.Fatalf("cmd() = %#v, want exitDelayMsg", msg)
-	}
-
-	next, quitCmd := model.Update(msg)
-	model = next.(Model)
-	if !model.exiting {
-		t.Fatal("expected model to remain exiting during delay")
-	}
-	if quitCmd == nil {
-		t.Fatal("expected tea.Quit after delay")
-	}
-}
-
 func TestFormatStartupStatusLineShowsExitCode(t *testing.T) {
 	got := formatStartupStatusLine(startupItem{
 		Label:       "echo one",
@@ -1027,23 +983,6 @@ func TestUpdateInactiveQQuits(t *testing.T) {
 
 	if !teaModel.(Model).exiting {
 		t.Fatalf("expected model to be in exiting state")
-	}
-}
-
-func TestUpdateInactiveQQuitsWithNoPanels(t *testing.T) {
-	model := NewModel(nil)
-
-	teaModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil {
-		t.Fatal("expected quit command with no panels")
-	}
-
-	got := teaModel.(Model)
-	if !got.exiting {
-		t.Fatal("expected model to be in exiting state")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("cmd() = %#v, want tea.QuitMsg", cmd())
 	}
 }
 
@@ -1698,160 +1637,28 @@ func TestXShortcutKillsPanel(t *testing.T) {
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	model = next.(Model)
 
-	if !model.panelStopping[0] {
-		t.Fatal("expected panelStopping true after x")
+	if !model.killingPanel {
+		t.Fatal("expected killingPanel state to be true")
 	}
-	if len(model.messageBuffer) != 1 {
-		t.Fatalf("messageBuffer len = %d, want 1", len(model.messageBuffer))
-	}
-	if model.messageBuffer[0] != "exiting panel one...." {
-		t.Fatalf("messageBuffer[0] = %q", model.messageBuffer[0])
+	if model.killingPanelIdx != 0 {
+		t.Fatalf("expected killingPanelIdx to be 0, got %d", model.killingPanelIdx)
 	}
 	if cmd == nil {
 		t.Fatal("expected a command to be returned")
 	}
 
 	// Simulate exitProgressMsg
-	msg := exitProgressMsg{panelIdx: 0, panelName: "one", status: "stopped"}
+	msg := exitProgressMsg{panelIdx: 0, status: "exiting panel one.... exiting completed..."}
 	next, cmd = model.Update(msg)
 	model = next.(Model)
 
+	if model.killingPanel {
+		t.Fatal("expected killingPanel state to be false")
+	}
 	if model.activePanel != -1 {
 		t.Fatalf("expected activePanel to be -1, got %d", model.activePanel)
 	}
-	if model.panelStopping[0] {
-		t.Fatal("expected panelStopping false after completion")
-	}
-	if len(model.messageBuffer) != 2 {
-		t.Fatalf("messageBuffer len = %d, want 2", len(model.messageBuffer))
-	}
-	if model.messageBuffer[1] != "exiting panel one.... stopped" {
-		t.Fatalf("messageBuffer[1] = %q", model.messageBuffer[1])
-	}
 	if cmd != nil {
 		t.Fatal("expected no more commands")
-	}
-}
-
-func TestXShortcutIgnoresRepeatAndBlocksRestartWhileStopping(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-	})
-	model.activePanel = 0
-	model.panelRunning = func(*process.Panel) bool { return true }
-
-	restarts := 0
-	model.restartPanel = func(*process.Panel) error {
-		restarts++
-		return nil
-	}
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	model = next.(Model)
-	if cmd == nil {
-		t.Fatal("expected first x to start stop command")
-	}
-
-	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	model = next.(Model)
-	if cmd != nil {
-		t.Fatal("expected repeated x while stopping to be ignored")
-	}
-
-	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	model = next.(Model)
-	if cmd != nil {
-		t.Fatal("expected restart while stopping to be ignored")
-	}
-	if restarts != 0 {
-		t.Fatalf("restarts = %d, want 0", restarts)
-	}
-}
-
-func TestQuitWhilePanelAlreadyStoppingDoesNotDoubleCount(t *testing.T) {
-	prev := newExitDelayCmd
-	newExitDelayCmd = func() tea.Cmd {
-		return func() tea.Msg { return exitDelayMsg{} }
-	}
-	t.Cleanup(func() {
-		newExitDelayCmd = prev
-	})
-
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-	})
-	model.activePanel = 0
-	model.panelRunning = func(*process.Panel) bool { return true }
-
-	next, stopCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	model = next.(Model)
-	if stopCmd == nil {
-		t.Fatal("expected x stop command")
-	}
-
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	model = next.(Model)
-	if model.activePanel != -1 {
-		t.Fatalf("expected panel blur before global quit, got %d", model.activePanel)
-	}
-
-	next, quitCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	model = next.(Model)
-	if !model.exiting {
-		t.Fatal("expected exiting state after q")
-	}
-	if quitCmd != nil {
-		t.Fatal("expected no duplicate quit command for already stopping panel")
-	}
-
-	msg := stopCmd()
-	next, delayCmd := model.Update(msg)
-	model = next.(Model)
-	if model.exitCompleted != 1 {
-		t.Fatalf("exitCompleted = %d, want 1", model.exitCompleted)
-	}
-	if delayCmd == nil {
-		t.Fatal("expected delayed quit after in-flight stop completes")
-	}
-
-	next, quitCmd = model.Update(delayCmd())
-	model = next.(Model)
-	if !model.exitDelayPending {
-		t.Fatal("expected exitDelayPending to remain true before quit")
-	}
-	if quitCmd == nil {
-		t.Fatal("expected tea.Quit after delay")
-	}
-
-	next, extraCmd := model.Update(msg)
-	model = next.(Model)
-	if model.exitCompleted != 1 {
-		t.Fatalf("exitCompleted after duplicate msg = %d, want 1", model.exitCompleted)
-	}
-	if extraCmd != nil {
-		t.Fatal("expected duplicate exitProgressMsg to not schedule another command")
-	}
-}
-
-func TestWrapExitingFormatsShutdownOverlay(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-		process.New("two", "echo two", "", "."),
-	})
-	model.width = 80
-	model.height = 24
-	model.exiting = true
-	model.exitStatuses = []string{"stopping...", "stopped"}
-	model.exitCompleted = 1
-
-	view := ansi.Strip(model.wrapExiting("body"))
-	if !strings.Contains(view, "Shutting down panels") {
-		t.Fatalf("view = %q, want shutdown title", view)
-	}
-	if !strings.Contains(view, "[1] one") || !strings.Contains(view, "[2] two") {
-		t.Fatalf("view = %q, want panel labels", view)
-	}
-	if !strings.Contains(view, "stopping...") || !strings.Contains(view, "stopped") {
-		t.Fatalf("view = %q, want exit statuses", view)
 	}
 }

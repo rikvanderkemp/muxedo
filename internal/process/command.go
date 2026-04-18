@@ -62,15 +62,6 @@ func (c CommandSpec) BuildContext(ctx context.Context, dir string, loginShell bo
 	return cmd, nil
 }
 
-// mustBuild is a convenience for tests that expect a valid command spec.
-func (c CommandSpec) mustBuild(dir string, loginShell bool) *exec.Cmd {
-	cmd, err := c.Build(dir, loginShell)
-	if err != nil {
-		panic(err)
-	}
-	return cmd
-}
-
 // IsZero reports whether the command spec is unset.
 func (c CommandSpec) IsZero() bool {
 	return c.Program == "" && len(c.Args) == 0 && c.Shell == ""

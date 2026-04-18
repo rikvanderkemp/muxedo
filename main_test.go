@@ -16,50 +16,47 @@ import (
 )
 
 func TestResolveProfilePath(t *testing.T) {
-	tempDir := t.TempDir()
-	explicit := filepath.Join(tempDir, "profile.toml")
-	dotMuxedo := filepath.Join(tempDir, ".muxedo")
-	if err := os.WriteFile(dotMuxedo, []byte("profile"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
 	tests := []struct {
-		name      string
-		profile   string
-		removeDot bool
-		wantPath  string
-		wantErr   string
+		name         string
+		useExplicit  bool
+		writeDotFile bool
+		wantDefault  bool
+		wantErr      string
 	}{
 		{
-			name:     "uses explicit flag value",
-			profile:  explicit,
-			wantPath: explicit,
+			name:        "uses explicit flag value",
+			useExplicit: true,
 		},
 		{
-			name:     "uses dot muxedo in working directory",
-			wantPath: dotMuxedo,
+			name:         "uses dot muxedo in working directory",
+			writeDotFile: true,
+			wantDefault:  true,
 		},
 		{
-			name:      "requires flag when dot muxedo missing",
-			removeDot: true,
-			wantErr:   "-profile is required",
+			name:    "requires flag when dot muxedo missing",
+			wantErr: "no profile found: pass -profile or run in an interactive terminal to use the first-run wizard",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.removeDot {
-				if err := os.Remove(dotMuxedo); err != nil {
-					t.Fatalf("Remove() error = %v", err)
-				}
-			} else if _, err := os.Stat(dotMuxedo); os.IsNotExist(err) {
+			dir := t.TempDir()
+			explicit := filepath.Join(dir, "profile.toml")
+			dotMuxedo := filepath.Join(dir, ".muxedo")
+
+			if tt.writeDotFile {
 				if err := os.WriteFile(dotMuxedo, []byte("profile"), 0o644); err != nil {
 					t.Fatalf("WriteFile() error = %v", err)
 				}
 			}
 
-			got, err := withWorkingDir(tempDir, func() (string, error) {
-				return resolveProfilePath(tt.profile)
+			var flagValue string
+			if tt.useExplicit {
+				flagValue = explicit
+			}
+
+			got, err := withWorkingDir(dir, func() (string, error) {
+				return resolveProfilePath(flagValue)
 			})
 			if tt.wantErr != "" {
 				if err == nil {
@@ -73,8 +70,13 @@ func TestResolveProfilePath(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveProfilePath() error = %v", err)
 			}
-			if got != tt.wantPath {
-				t.Fatalf("resolveProfilePath() = %q, want %q", got, tt.wantPath)
+
+			want := explicit
+			if tt.wantDefault {
+				want = dotMuxedo
+			}
+			if got != want {
+				t.Fatalf("resolveProfilePath() = %q, want %q", got, want)
 			}
 		})
 	}
@@ -82,7 +84,7 @@ func TestResolveProfilePath(t *testing.T) {
 
 func TestRunUpdateCheckDoesNotRequireProfile(t *testing.T) {
 	original := newUpdater
-	defer func() { newUpdater = original }()
+	t.Cleanup(func() { newUpdater = original })
 
 	newUpdater = func() updaterAPI {
 		return updaterStub{check: func(currentVersion string) (update.CheckResult, error) {
@@ -111,7 +113,7 @@ func TestRunUpdateCheckDoesNotRequireProfile(t *testing.T) {
 
 func TestRunUpdateApplyPrintsRestartMessage(t *testing.T) {
 	original := newUpdater
-	defer func() { newUpdater = original }()
+	t.Cleanup(func() { newUpdater = original })
 
 	newUpdater = func() updaterAPI {
 		return updaterStub{apply: func(currentVersion string, executablePath string) (update.ApplyResult, error) {
@@ -148,7 +150,7 @@ func TestRunStartupSkipsUpdateWhenConfigDisabled(t *testing.T) {
 		return updaterStub{}
 	}
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -185,7 +187,7 @@ func TestRunStartupContinuesWhenNoUpdateAvailable(t *testing.T) {
 		}
 	}
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -231,7 +233,7 @@ func TestRunStartupPromptsAndSkipsWhenUserDeclines(t *testing.T) {
 		}
 	}
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -297,7 +299,7 @@ func TestRunStartupAppliesUpdateAndExecsSelf(t *testing.T) {
 		return nil
 	}
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -331,7 +333,7 @@ func TestRunStartupWarnsAndContinuesOnCheckError(t *testing.T) {
 		}
 	}
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -375,7 +377,7 @@ func TestRunStartupSkipsPromptWhenNonInteractive(t *testing.T) {
 		}
 	}
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -411,9 +413,13 @@ func TestRunHelpPrintsCommands(t *testing.T) {
 }
 
 func TestRunWithoutProfilePrintsUsage(t *testing.T) {
+	originalTTY := isInteractiveTTY
+	defer func() { isInteractiveTTY = originalTTY }()
+	isInteractiveTTY = func(io.Reader, io.Writer) bool { return false }
+
 	tempDir := t.TempDir()
 
-	result := withWorkingDirValue(tempDir, func() runResult {
+	result := withWorkingDirValue(t, tempDir, func() runResult {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		exitCode := run(nil, &stdout, &stderr)
@@ -427,11 +433,142 @@ func TestRunWithoutProfilePrintsUsage(t *testing.T) {
 	if result.exitCode != 1 {
 		t.Fatalf("run(nil) exitCode = %d, want 1", result.exitCode)
 	}
-	if !strings.Contains(result.stderr, "-profile is required") {
+	if !strings.Contains(result.stderr, "no profile found") {
 		t.Fatalf("run(nil) stderr = %q, want missing profile error", result.stderr)
 	}
 	if !strings.Contains(result.stderr, "Commands:") {
 		t.Fatalf("run(nil) stderr = %q, want usage with commands", result.stderr)
+	}
+}
+
+func TestRunWithoutProfileSkipsWizardInNonInteractiveSession(t *testing.T) {
+	originalTTY := isInteractiveTTY
+	defer func() { isInteractiveTTY = originalTTY }()
+	isInteractiveTTY = func(io.Reader, io.Writer) bool { return false }
+
+	originalRunWizard := runWizard
+	defer func() { runWizard = originalRunWizard }()
+	runWizard = func(tea.Model) (tea.Model, error) {
+		t.Errorf("runWizard invoked in non-interactive session")
+		return nil, nil
+	}
+
+	tempDir := t.TempDir()
+	result := withWorkingDirValue(t, tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{
+			stdout:   stdout.String(),
+			stderr:   stderr.String(),
+			exitCode: exitCode,
+		}
+	})
+
+	if result.exitCode != 1 {
+		t.Fatalf("exitCode = %d, want 1", result.exitCode)
+	}
+	if !strings.Contains(result.stderr, "no profile found") {
+		t.Fatalf("stderr = %q, want missing profile error", result.stderr)
+	}
+}
+
+func TestRunWithoutProfileLaunchesWizardWhenInteractiveAndContinues(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	originalLaunch := launchWelcomeWizardFn
+	t.Cleanup(func() { launchWelcomeWizardFn = originalLaunch })
+
+	tempDir := t.TempDir()
+	writeConfig(t, tempDir, "")
+
+	wizardProfilePath := filepath.Join(tempDir, "wizard.muxedo")
+	if err := os.WriteFile(wizardProfilePath, []byte("workingdir = \".\"\n\n[panel.test]\nshell = \"printf ok\\n\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(wizard profile) error = %v", err)
+	}
+
+	launchCalls := 0
+	launchWelcomeWizardFn = func(config.Config, io.Writer) (string, error) {
+		launchCalls++
+		return wizardProfilePath, nil
+	}
+
+	result := withWorkingDirValue(t, tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if launchCalls != 1 {
+		t.Fatalf("launchCalls = %d, want 1", launchCalls)
+	}
+	if result.stderr != "" {
+		t.Fatalf("stderr = %q, want empty", result.stderr)
+	}
+}
+
+func TestRunWithoutProfileLaunchesWizardWhenInteractiveAndAborts(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	originalLaunch := launchWelcomeWizardFn
+	t.Cleanup(func() { launchWelcomeWizardFn = originalLaunch })
+
+	tempDir := t.TempDir()
+	writeConfig(t, tempDir, "")
+
+	launchCalls := 0
+	launchWelcomeWizardFn = func(config.Config, io.Writer) (string, error) {
+		launchCalls++
+		return "", nil
+	}
+
+	result := withWorkingDirValue(t, tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %q", result.exitCode, result.stderr)
+	}
+	if launchCalls != 1 {
+		t.Fatalf("launchCalls = %d, want 1", launchCalls)
+	}
+}
+
+func TestRunWithoutProfileLaunchesWizardWhenInteractiveAndErrors(t *testing.T) {
+	restore := stubStartupEnv(t)
+	defer restore()
+
+	originalLaunch := launchWelcomeWizardFn
+	t.Cleanup(func() { launchWelcomeWizardFn = originalLaunch })
+
+	tempDir := t.TempDir()
+	writeConfig(t, tempDir, "")
+
+	launchWelcomeWizardFn = func(config.Config, io.Writer) (string, error) {
+		return "", os.ErrPermission
+	}
+
+	result := withWorkingDirValue(t, tempDir, func() runResult {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(nil, &stdout, &stderr)
+		return runResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+	})
+
+	if result.exitCode != 1 {
+		t.Fatalf("exitCode = %d, want 1", result.exitCode)
+	}
+	if !strings.Contains(result.stderr, "error:") {
+		t.Fatalf("stderr = %q, want error prefix", result.stderr)
 	}
 }
 
@@ -512,20 +649,30 @@ func withWorkingDir[T any](dir string, fn func() (T, error)) (T, error) {
 	return fn()
 }
 
-func withWorkingDirValue[T any](dir string, fn func() T) T {
+// withWorkingDirValue temporarily chdirs into dir, runs fn, and restores cwd
+// via t.Cleanup. Tests that use this helper (and stubStartupEnv, which swaps
+// package-level globals) must NOT call t.Parallel: Chdir and the shared vars
+// are process-global and would race across parallel subtests.
+//
+// t.Cleanup fires LIFO, so the cwd restore runs before any t.TempDir cleanup
+// the caller registered, which prevents RemoveAll from tripping over a cwd
+// still inside the doomed directory.
+func withWorkingDirValue[T any](t *testing.T, dir string, fn func() T) T {
+	t.Helper()
 	original, err := os.Getwd()
 	if err != nil {
-		var zero T
-		return zero
+		t.Fatalf("Getwd() error = %v", err)
 	}
 
 	if err := os.Chdir(dir); err != nil {
-		var zero T
-		return zero
+		t.Fatalf("Chdir(%s) error = %v", dir, err)
 	}
-	defer func() {
-		_ = os.Chdir(original)
-	}()
+	t.Cleanup(func() {
+		// t.Errorf (not Fatalf): cleanup must not call FailNow.
+		if err := os.Chdir(original); err != nil {
+			t.Errorf("restoring cwd to %s: %v", original, err)
+		}
+	})
 
 	return fn()
 }

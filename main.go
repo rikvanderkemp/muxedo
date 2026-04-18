@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/rikvanderkemp/muxedo/internal/config"
 	"github.com/rikvanderkemp/muxedo/internal/profile"
 	"github.com/rikvanderkemp/muxedo/internal/ui"
+	"github.com/rikvanderkemp/muxedo/internal/ui/welcome"
 	"github.com/rikvanderkemp/muxedo/internal/update"
 )
 
@@ -38,10 +40,18 @@ var (
 		_, err := prog.Run()
 		return err
 	}
-	promptInput      io.Reader = os.Stdin
-	promptOutput     io.Writer = os.Stdout
-	isInteractiveTTY           = defaultIsInteractiveTTY
-	execSelf                   = defaultExecSelf
+	// runWizard drives the first-run wizard. Intentionally omits
+	// WithMouseCellMotion: the wizard is keyboard-only, and enabling mouse
+	// capture would break terminal text selection during onboarding.
+	runWizard = func(model tea.Model) (tea.Model, error) {
+		prog := tea.NewProgram(model, tea.WithAltScreen())
+		return prog.Run()
+	}
+	promptInput           io.Reader = os.Stdin
+	promptOutput          io.Writer = os.Stdout
+	isInteractiveTTY                = defaultIsInteractiveTTY
+	execSelf                        = defaultExecSelf
+	launchWelcomeWizardFn           = launchWelcomeWizard
 )
 
 type updaterAPI interface {
@@ -107,9 +117,21 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	resolvedProfilePath, err := resolveProfilePath(*profilePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		printUsage(stderr)
-		return 1
+		if errors.Is(err, errDefaultProfileMissing) && isInteractiveTTY(promptInput, promptOutput) {
+			wizardPath, werr := launchWelcomeWizardFn(appConfig, stdout)
+			if werr != nil {
+				fmt.Fprintf(stderr, "error: %v\n", werr)
+				return 1
+			}
+			if wizardPath == "" {
+				return 0
+			}
+			resolvedProfilePath = wizardPath
+		} else {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			printUsage(stderr)
+			return 1
+		}
 	}
 
 	cfg, err := profile.Load(resolvedProfilePath)
@@ -272,6 +294,8 @@ func defaultExecSelf(executablePath string, args []string) error {
 	return syscall.Exec(executablePath, append([]string{executablePath}, args...), os.Environ())
 }
 
+var errDefaultProfileMissing = errors.New("no profile found: pass -profile or run in an interactive terminal to use the first-run wizard")
+
 func resolveProfilePath(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
@@ -282,14 +306,34 @@ func resolveProfilePath(flagValue string) (string, error) {
 		return "", fmt.Errorf("determining working directory: %w", err)
 	}
 
-	defaultPath := filepath.Join(cwd, ".muxedo")
-	if _, err := os.Stat(defaultPath); err == nil {
+	defaultPath := filepath.Join(cwd, welcome.DefaultSaveFile)
+	_, err = os.Stat(defaultPath)
+	if err == nil {
 		return defaultPath, nil
-	} else if !os.IsNotExist(err) {
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("checking default profile: %w", err)
 	}
 
-	return "", fmt.Errorf("-profile is required")
+	return "", errDefaultProfileMissing
+}
+
+func launchWelcomeWizard(appConfig config.Config, stdout io.Writer) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("determining working directory: %w", err)
+	}
+
+	theme := ui.ResolveTheme(appConfig.Theme)
+	result, err := welcome.Run(cwd, theme, runWizard)
+	if err != nil {
+		return "", fmt.Errorf("welcome wizard: %w", err)
+	}
+	if result.Aborted || result.SavedPath == "" {
+		fmt.Fprintln(stdout, "welcome wizard cancelled; no profile written")
+		return "", nil
+	}
+	return result.SavedPath, nil
 }
 
 func printExitMessage(w io.Writer) {

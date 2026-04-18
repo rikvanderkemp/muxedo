@@ -83,7 +83,7 @@ Or point at a profile explicitly:
 muxedo -profile profile.toml.example
 ```
 
-When `-profile` is omitted, muxedo looks for `./.muxedo` in the current working directory. If no profile is found, it prints the missing-profile error together with the full command help.
+When `-profile` is omitted, muxedo looks for `./.muxedo` in the current working directory. If no profile is found and the session is interactive, muxedo launches a first-run wizard that walks you through a title, a working directory, optional startup commands, and one or more panels, then writes a ready-to-use TOML profile (default path `./.muxedo`). In non-interactive sessions muxedo prints the missing-profile error with the full command help instead.
 
 ## Example Profile
 

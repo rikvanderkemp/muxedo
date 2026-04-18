@@ -577,10 +577,6 @@ func writeSGR(b *strings.Builder, fg, bg vt10x.Color) {
 	b.WriteByte('m')
 }
 
-func (p *Panel) viewSnapshot() string {
-	return p.viewState().Output
-}
-
 func (p *Panel) viewState() DisplayState {
 	p.termMu.RLock()
 	defer p.termMu.RUnlock()
