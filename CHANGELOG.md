@@ -1,12 +1,5 @@
 # Changelog
 
-## [0.1.16](https://github.com/rikvanderkemp/muxedo/compare/v0.1.15...v0.1.16) (2026-04-16)
-
-
-### Features
-
-* **ui:** refine panel shutdown flow ([#48](https://github.com/rikvanderkemp/muxedo/issues/48)) ([eb59d74](https://github.com/rikvanderkemp/muxedo/commit/eb59d741e03082d30981a8b0bc65b301e3149fdf))
-
 ## [0.1.15](https://github.com/rikvanderkemp/muxedo/compare/v0.1.14...v0.1.15) (2026-04-16)
 
 
