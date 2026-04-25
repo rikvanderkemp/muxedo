@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/rikvanderkemp/muxedo/internal/layout"
@@ -226,15 +226,10 @@ func (m Model) emitMsgBlocking(msg tea.Msg) {
 }
 
 func (m Model) Init() tea.Cmd {
-	windowTitle := "Muxedo"
-	if m.title != "" {
-		windowTitle = "Muxedo - " + m.title
-	}
-
 	if m.startupCompleted {
-		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
+		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen)
 	}
-	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle), m.startupSpinner.Tick)
+	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, m.startupSpinner.Tick)
 }
 
 func (m Model) startupSequence() tea.Msg {
@@ -455,13 +450,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+b" {
 			m.showBuffer = !m.showBuffer
 			return m, nil
 		}
 
-		if msg.Type == tea.KeyEsc {
+		if msg.String() == "esc" {
 			if m.activePanel >= 0 {
 				if m.panelSelectMode {
 					m.exitSelectMode()
@@ -487,11 +482,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.activePanel < 0 &&
-			msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-			if idx, ok := panelIndexFromDigit(msg.Runes[0], len(m.panels)); ok {
-				m.applyPanelFocus(idx)
-				return m, nil
+		if m.activePanel < 0 && msg.Mod == 0 {
+			if runes := []rune(msg.Text); len(runes) == 1 {
+				if idx, ok := panelIndexFromDigit(runes[0], len(m.panels)); ok {
+					m.applyPanelFocus(idx)
+					return m, nil
+				}
 			}
 		}
 
@@ -499,16 +495,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ensureScrollState()
 			p := m.panels[m.activePanel]
 
-			if !m.panelInsertMode && !m.panelScrollMode && !m.panelSelectMode &&
-				msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-				r := msg.Runes[0]
-				if next, ok := neighborPanelIndex(m.grid, len(m.panels), m.activePanel, r); ok {
-					m.applyPanelFocus(next)
-					return m, nil
-				}
-				if idx, ok := panelIndexFromDigit(r, len(m.panels)); ok {
-					m.applyPanelFocus(idx)
-					return m, nil
+			if !m.panelInsertMode && !m.panelScrollMode && !m.panelSelectMode && msg.Mod == 0 {
+				if runes := []rune(msg.Text); len(runes) == 1 {
+					r := runes[0]
+					if next, ok := neighborPanelIndex(m.grid, len(m.panels), m.activePanel, r); ok {
+						m.applyPanelFocus(next)
+						return m, nil
+					}
+					if idx, ok := panelIndexFromDigit(r, len(m.panels)); ok {
+						m.applyPanelFocus(idx)
+						return m, nil
+					}
 				}
 			}
 
@@ -530,39 +527,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.handleScrollKey(msg)
 					return m, nil
 				}
-				if msg.Type == tea.KeyRunes && (string(msg.Runes) == "r" || string(msg.Runes) == "R") {
+				if msg.Text == "r" || msg.Text == "R" {
 					if err := m.restartPanel(p); err != nil {
 						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
 					}
 					m.resizePanels()
 					return m, nil
 				}
-				if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-					switch msg.Runes[0] {
-					case 'i', 'I':
-						m.panelInsertMode = true
-					case 'm', 'M':
-						m.toggleMaximized()
-					case 'z', 'Z':
-						m.enterScrollMode()
-					case 'v', 'V':
-						m.enterSelectMode()
-					case 'x', 'X':
-						m.killingPanel = true
-						m.killingPanelIdx = m.activePanel
-						m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
-						return m, killPanelCmd(m.activePanel, p)
+				if msg.Mod == 0 {
+					if runes := []rune(msg.Text); len(runes) == 1 {
+						switch runes[0] {
+						case 'i', 'I':
+							m.panelInsertMode = true
+						case 'm', 'M':
+							m.toggleMaximized()
+						case 'z', 'Z':
+							m.enterScrollMode()
+						case 'v', 'V':
+							m.enterSelectMode()
+						case 'x', 'X':
+							m.killingPanel = true
+							m.killingPanelIdx = m.activePanel
+							m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
+							return m, killPanelCmd(m.activePanel, p)
+						}
 					}
 				}
 				return m, nil
 			}
 
 			if m.panelScrollMode {
-				if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-					switch msg.Runes[0] {
-					case 'v', 'V':
-						m.enterSelectMode()
-						return m, nil
+				if msg.Mod == 0 {
+					if runes := []rune(msg.Text); len(runes) == 1 {
+						switch runes[0] {
+						case 'v', 'V':
+							m.enterSelectMode()
+							return m, nil
+						}
 					}
 				}
 				m.handleScrollKey(msg)
@@ -588,31 +589,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-				switch msg.Runes[0] {
-				case 'i', 'I':
-					m.panelInsertMode = true
-					return m, nil
-				case 'm', 'M':
-					m.toggleMaximized()
-					return m, nil
-				case 'z', 'Z':
-					m.enterScrollMode()
-					return m, nil
-				case 'v', 'V':
-					m.enterSelectMode()
-					return m, nil
-				case 'r', 'R':
-					if err := m.restartPanel(p); err != nil {
-						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
+			if msg.Mod == 0 {
+				if runes := []rune(msg.Text); len(runes) == 1 {
+					switch runes[0] {
+					case 'i', 'I':
+						m.panelInsertMode = true
+						return m, nil
+					case 'm', 'M':
+						m.toggleMaximized()
+						return m, nil
+					case 'z', 'Z':
+						m.enterScrollMode()
+						return m, nil
+					case 'v', 'V':
+						m.enterSelectMode()
+						return m, nil
+					case 'r', 'R':
+						if err := m.restartPanel(p); err != nil {
+							m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
+						}
+						m.resizePanels()
+						return m, nil
+					case 'x', 'X':
+						m.killingPanel = true
+						m.killingPanelIdx = m.activePanel
+						m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
+						return m, killPanelCmd(m.activePanel, p)
 					}
-					m.resizePanels()
-					return m, nil
-				case 'x', 'X':
-					m.killingPanel = true
-					m.killingPanelIdx = m.activePanel
-					m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
-					return m, killPanelCmd(m.activePanel, p)
 				}
 			}
 			return m, nil
@@ -630,48 +633,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 
-	case tea.MouseMsg:
-		if m.panelSelectMode && m.activePanel >= 0 {
-			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
-				if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
-					switch msg.Action {
-					case tea.MouseActionPress:
-						if msg.Button == tea.MouseButtonLeft {
-							m.startSelection(row, col)
-							return m, nil
-						}
-					case tea.MouseActionMotion:
-						if msg.Button == tea.MouseButtonLeft {
-							m.updateSelection(row, col)
-							return m, nil
-						}
-					case tea.MouseActionRelease:
-						if msg.Button == tea.MouseButtonLeft {
-							m.finishSelection(row, col)
-							return m, nil
-						}
+	case tea.KeyMsg:
+		// Ignore key releases and other key events for now.
+		return m, nil
+	default:
+	}
+
+	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			if m.panelSelectMode && m.activePanel >= 0 {
+				if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
+					if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
+						m.startSelection(row, col)
+						return m, nil
 					}
 				}
 			}
+			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok {
+				m.applyPanelFocus(idx)
+				return m, nil
+			}
 		}
-		if m.activePanel >= 0 && m.panelScrollMode && msg.Action == tea.MouseActionPress {
+	case tea.MouseMotionMsg:
+		if m.panelSelectMode && m.activePanel >= 0 && msg.Button == tea.MouseLeft {
+			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
+				if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
+					m.updateSelection(row, col)
+					return m, nil
+				}
+			}
+		}
+	case tea.MouseReleaseMsg:
+		if m.panelSelectMode && m.activePanel >= 0 && msg.Button == tea.MouseLeft {
+			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
+				if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
+					m.finishSelection(row, col)
+					return m, nil
+				}
+			}
+		}
+	case tea.MouseWheelMsg:
+		if m.activePanel >= 0 && m.panelScrollMode {
 			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
 				switch msg.Button {
-				case tea.MouseButtonWheelUp:
+				case tea.MouseWheelUp:
 					m.scrollViewportBy(-3)
 					return m, nil
-				case tea.MouseButtonWheelDown:
+				case tea.MouseWheelDown:
 					m.scrollViewportBy(3)
 					return m, nil
 				}
 			}
 		}
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok {
-				m.applyPanelFocus(idx)
-			}
-		}
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -744,9 +758,22 @@ func (m Model) gridHeight() int {
 	return m.height
 }
 
-func (m Model) View() string {
+func (m Model) view(content string) tea.View {
+	content = strings.TrimSuffix(content, "\n")
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	if m.title != "" {
+		v.WindowTitle = "Muxedo - " + m.title
+	} else {
+		v.WindowTitle = "Muxedo"
+	}
+	return v
+}
+
+func (m Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
-		return "Starting muxedo..."
+		return m.view("Starting muxedo...")
 	}
 
 	if !m.startupCompleted || m.showBuffer {
@@ -754,7 +781,7 @@ func (m Model) View() string {
 		if m.height > 1 {
 			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 		}
-		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body)
+		return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, body))
 	}
 
 	gh := m.gridHeight()
@@ -779,10 +806,21 @@ func (m Model) View() string {
 		if m.height > 1 {
 			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 		}
-		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body))
+		return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body)))
 	}
 
 	cell := layout.CellSizes(m.width, gh, m.grid.Rows, m.grid.Cols)
+	gapX := 1
+	gapY := 1
+	availW := m.width - gapX*(m.grid.Cols-1)
+	availH := gh - gapY*(m.grid.Rows-1)
+	if availW < 1 {
+		availW = 1
+	}
+	if availH < 1 {
+		availH = 1
+	}
+	cell = layout.CellSizes(availW, availH, m.grid.Rows, m.grid.Cols)
 
 	var gridRows []string
 	idx := 0
@@ -814,16 +852,31 @@ func (m Model) View() string {
 			}
 			idx++
 		}
-		row := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+		sep := strings.Repeat(" ", gapX)
+		row := lipgloss.JoinHorizontal(lipgloss.Top, interleave(cols, sep)...)
 		gridRows = append(gridRows, row)
 	}
 
-	body := strings.Join(gridRows, "\n")
+	body := strings.Join(gridRows, strings.Repeat("\n", gapY))
 	if m.height > 1 {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 	}
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body))
+	return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body)))
+}
+
+func interleave(items []string, sep string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	out := make([]string, 0, len(items)*2-1)
+	for i, it := range items {
+		if i > 0 {
+			out = append(out, sep)
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 func (m Model) wrapExiting(body string) string {
@@ -1180,16 +1233,18 @@ func (m *Model) clearActiveSelection() {
 	m.selections[m.activePanel] = panelSelection{}
 }
 
-func (m *Model) handleSelectKey(msg tea.KeyMsg) bool {
-	if msg.Type == tea.KeyEnter {
+func (m *Model) handleSelectKey(msg tea.KeyPressMsg) bool {
+	if msg.String() == "enter" {
 		m.copyCurrentSelection()
 		return true
 	}
-	if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case 'y', 'Y':
-			m.copyCurrentSelection()
-			return true
+	if msg.Mod == 0 {
+		if runes := []rune(msg.Text); len(runes) == 1 {
+			switch runes[0] {
+			case 'y', 'Y':
+				m.copyCurrentSelection()
+				return true
+			}
 		}
 	}
 	return false
@@ -1242,30 +1297,32 @@ func (m *Model) finishSelection(row, col int) {
 	m.selections[idx] = sel
 }
 
-func (m *Model) handleScrollKey(msg tea.KeyMsg) {
-	switch msg.Type {
-	case tea.KeyPgUp:
+func (m *Model) handleScrollKey(msg tea.KeyPressMsg) {
+	switch msg.String() {
+	case "pgup":
 		m.scrollViewportBy(-m.activePaneLineCapacity())
-	case tea.KeyPgDown:
+	case "pgdown":
 		m.scrollViewportBy(m.activePaneLineCapacity())
-	case tea.KeyUp:
+	case "up":
 		m.moveSelectionBy(-1)
-	case tea.KeyDown:
+	case "down":
 		m.moveSelectionBy(1)
 	}
 
-	if msg.Type == tea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case 'j':
-			m.moveSelectionBy(1)
-		case 'k':
-			m.moveSelectionBy(-1)
-		case 'g':
-			m.jumpSelectionTo(0)
-		case 'G':
-			m.jumpSelectionTo(-1)
-		case 'm':
-			m.toggleMark()
+	if msg.Mod == 0 {
+		if runes := []rune(msg.Text); len(runes) == 1 {
+			switch runes[0] {
+			case 'j':
+				m.moveSelectionBy(1)
+			case 'k':
+				m.moveSelectionBy(-1)
+			case 'g':
+				m.jumpSelectionTo(0)
+			case 'G':
+				m.jumpSelectionTo(-1)
+			case 'm':
+				m.toggleMark()
+			}
 		}
 	}
 }
@@ -1715,39 +1772,39 @@ func clamp(value, low, high int) int {
 	return value
 }
 
-func keyMsgToBytes(msg tea.KeyMsg) []byte {
-	if msg.Type == tea.KeyRunes {
-		payload := []byte(string(msg.Runes))
-		if msg.Alt {
+func keyMsgToBytes(msg tea.KeyPressMsg) []byte {
+	if msg.Text != "" {
+		payload := []byte(msg.Text)
+		if msg.Mod.Contains(tea.ModAlt) {
 			return append([]byte{0x1b}, payload...)
 		}
 		return payload
 	}
 
-	if msg.Type >= tea.KeyCtrlA && msg.Type <= tea.KeyCtrlZ {
-		return []byte{byte(msg.Type)}
+	if msg.Mod == tea.ModCtrl && msg.Code >= 'a' && msg.Code <= 'z' {
+		return []byte{byte(msg.Code - 'a' + 1)}
 	}
 
-	switch msg.Type {
-	case tea.KeyCtrlAt:
+	switch msg.String() {
+	case "ctrl+@":
 		return []byte{0x00}
-	case tea.KeyEsc:
+	case "esc":
 		return []byte{0x1b}
-	case tea.KeyEnter:
+	case "enter":
 		return []byte{'\r'}
-	case tea.KeyTab:
+	case "tab":
 		return []byte{'\t'}
-	case tea.KeyBackspace:
+	case "backspace":
 		return []byte{0x7f}
-	case tea.KeySpace:
+	case "space":
 		return []byte{' '}
-	case tea.KeyUp:
+	case "up":
 		return []byte("\x1b[A")
-	case tea.KeyDown:
+	case "down":
 		return []byte("\x1b[B")
-	case tea.KeyRight:
+	case "right":
 		return []byte("\x1b[C")
-	case tea.KeyLeft:
+	case "left":
 		return []byte("\x1b[D")
 	}
 

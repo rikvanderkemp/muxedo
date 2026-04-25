@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/rikvanderkemp/muxedo/internal/process"
 	"github.com/rikvanderkemp/muxedo/internal/profile"
@@ -121,8 +121,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.KeyMsg:
+		// Ignore key releases and other key events.
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -132,28 +135,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC {
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
 		m.aborted = true
 		return m, tea.Quit
 	}
 
 	if m.step == stepSaved {
-		if msg.Type == tea.KeyEnter || msg.Type == tea.KeySpace {
+		if msg.String() == "enter" || msg.String() == "space" {
 			m.aborted = false
 			return m, tea.Quit
 		}
 		return m, nil
 	}
 
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch msg.String() {
+	case "esc":
 		if m.isDirStep() && m.dirPickOpen {
 			m.closeDirPicker()
 			return m, nil
 		}
 		return m.goBack()
-	case tea.KeyEnter:
+	case "enter":
 		return m.advance()
 	}
 
@@ -162,7 +165,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.isDirStep() {
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyTab:
 			if m.dirPickOpen && len(m.dirMatches) > 0 {
 				m.replaceInput(m.dirMatches[m.dirPickIdx])
@@ -186,7 +189,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.usesInput() {
 		// Backspace on an empty field jumps back a step for a nicer UX.
-		if msg.Type == tea.KeyBackspace && m.input.Value() == "" {
+		if msg.String() == "backspace" && m.input.Value() == "" {
 			return m.goBack()
 		}
 		m.errMsg = ""
@@ -268,8 +271,8 @@ func (m *Model) replaceInput(value string) {
 	m.input.CursorEnd()
 }
 
-func (m Model) handleChoiceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	isToggleKey := msg.Type == tea.KeySpace || isToggleString(msg.String())
+func (m Model) handleChoiceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	isToggleKey := msg.String() == "space" || isToggleString(msg.String())
 
 	switch m.step {
 	case stepStartupMode:
@@ -317,15 +320,20 @@ func (m Model) newInput(placeholder, initial string) textinput.Model {
 	in.Placeholder = placeholder
 	in.Prompt = "> "
 	in.CharLimit = 512
-	in.Width = 60
+	in.SetWidth(60)
 
-	in.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.InactiveTitleFG))
-	in.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.StatusTimeFG))
-	in.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.StatusHintFG)).Faint(true)
+	styles := textinput.DefaultStyles(false)
+	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.InactiveTitleFG))
+	styles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.StatusTimeFG))
+	styles.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.StatusHintFG)).Faint(true)
+	styles.Blurred.Prompt = styles.Focused.Prompt
+	styles.Blurred.Text = styles.Focused.Text
+	styles.Blurred.Placeholder = styles.Focused.Placeholder
+	in.SetStyles(styles)
 
 	in.SetValue(initial)
 	in.CursorEnd()
-	in.Focus()
+	_ = in.Focus()
 	return in
 }
 
@@ -576,10 +584,18 @@ func (m Model) writeProfile() (string, error) {
 	return savedPath, nil
 }
 
+func (m Model) view(content string) tea.View {
+	content = strings.TrimSuffix(content, "\n")
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.WindowTitle = "Muxedo - first run"
+	return v
+}
+
 // View satisfies tea.Model.
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	if m.step == stepSaved {
-		return m.renderSaved()
+		return m.view(m.renderSaved())
 	}
 
 	header := m.renderHeader()
@@ -595,9 +611,9 @@ func (m Model) View() string {
 	card := cardStyle.Render(strings.Join([]string{header, "", "", body, "", footer}, "\n"))
 
 	if m.width == 0 || m.height == 0 {
-		return card
+		return m.view(card)
 	}
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card)
+	return m.view(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card))
 }
 
 func clampWidth(w int) int {

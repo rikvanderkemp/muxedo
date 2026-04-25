@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/rikvanderkemp/muxedo/internal/config"
 	"github.com/rikvanderkemp/muxedo/internal/profile"
@@ -36,7 +36,7 @@ var (
 		return update.NewUpdaterWithClient("rikvanderkemp", "muxedo", &http.Client{Timeout: 2 * time.Second})
 	}
 	runProgram = func(model tea.Model) error {
-		prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		prog := tea.NewProgram(model)
 		_, err := prog.Run()
 		return err
 	}
@@ -44,7 +44,7 @@ var (
 	// WithMouseCellMotion: the wizard is keyboard-only, and enabling mouse
 	// capture would break terminal text selection during onboarding.
 	runWizard = func(model tea.Model) (tea.Model, error) {
-		prog := tea.NewProgram(model, tea.WithAltScreen())
+		prog := tea.NewProgram(model)
 		return prog.Run()
 	}
 	promptInput           io.Reader = os.Stdin

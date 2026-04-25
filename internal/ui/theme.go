@@ -2,9 +2,11 @@
 package ui
 
 import (
+	"image/color"
+
 	"github.com/rikvanderkemp/muxedo/internal/config"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 type Theme struct {
@@ -114,6 +116,6 @@ func mergeThemeString(dst *string, src string) {
 	}
 }
 
-func (t Theme) color(value string) lipgloss.Color {
+func (t Theme) color(value string) color.Color {
 	return lipgloss.Color(value)
 }

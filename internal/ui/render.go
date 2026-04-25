@@ -2,11 +2,12 @@
 package ui
 
 import (
+	"image/color"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/rikvanderkemp/muxedo/internal/process"
@@ -14,8 +15,8 @@ import (
 
 type statusSegment struct {
 	Text string
-	FG   lipgloss.Color
-	BG   lipgloss.Color
+	FG   color.Color
+	BG   color.Color
 }
 
 type paneViewport struct {
@@ -189,10 +190,8 @@ func renderPane(theme Theme, title string, output process.DisplayState, width, h
 	inner := titleBar + "\n" + content
 
 	box := borderRenderer.
-		Width(innerW).
-		Height(innerH).
-		MaxWidth(width).
-		MaxHeight(height).
+		Width(width).
+		Height(height).
 		Render(inner)
 
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, box)

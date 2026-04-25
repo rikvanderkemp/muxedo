@@ -6,9 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 
 	"github.com/rikvanderkemp/muxedo/internal/process"
 )
@@ -77,7 +76,7 @@ func TestRenderPaneFooterPlacesTimerOnRight(t *testing.T) {
 	if ansi.StringWidth(row) != 30 {
 		t.Fatalf("expected footer width 30, got %d", ansi.StringWidth(row))
 	}
-	if !strings.HasSuffix(strings.TrimRight(row, " "), "1m30s") {
+	if !strings.HasSuffix(strings.TrimRight(ansi.Strip(row), " "), "1m30s") {
 		t.Fatalf("expected timer at right edge, got %q", row)
 	}
 }
@@ -163,12 +162,6 @@ func TestFitLinesKeepsBlankCursorRowVisible(t *testing.T) {
 }
 
 func TestRenderStatusLineUsesThemeColors(t *testing.T) {
-	oldProfile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() {
-		lipgloss.SetColorProfile(oldProfile)
-	})
-
 	theme := DefaultTheme()
 	theme.StatusBarFG = "#112233"
 	theme.StatusBarBG = "#445566"
@@ -197,11 +190,11 @@ func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
 	model.panelRunning = func(*process.Panel) bool { return true }
 
 	view := model.View()
-	if !strings.Contains(view, "alpha") {
-		t.Fatalf("expected maximized view to include active panel, got %q", view)
+	if !strings.Contains(view.Content, "alpha") {
+		t.Fatalf("expected maximized view to include active panel, got %q", view.Content)
 	}
-	if strings.Contains(view, "beta") {
-		t.Fatalf("expected maximized view to hide inactive panel, got %q", view)
+	if strings.Contains(view.Content, "beta") {
+		t.Fatalf("expected maximized view to hide inactive panel, got %q", view.Content)
 	}
 }
 
@@ -220,12 +213,6 @@ func TestRenderPaneShowsSelectModeTitle(t *testing.T) {
 }
 
 func TestRenderPaneActiveStoppedUsesActiveBorder(t *testing.T) {
-	oldProfile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() {
-		lipgloss.SetColorProfile(oldProfile)
-	})
-
 	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, true, false, false, false, nil, "1s")
 	if !strings.Contains(pane, "38;2;255;135;0") {
 		t.Fatalf("expected active border color escape in %q", pane)
@@ -236,12 +223,6 @@ func TestRenderPaneActiveStoppedUsesActiveBorder(t *testing.T) {
 }
 
 func TestFitViewportLinesHighlightsSelectedColumns(t *testing.T) {
-	oldProfile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() {
-		lipgloss.SetColorProfile(oldProfile)
-	})
-
 	lines := fitViewportLines(DefaultTheme(), &paneViewport{
 		Lines:             []string{"abcdef"},
 		SelectionActive:   true,
@@ -257,12 +238,6 @@ func TestFitViewportLinesHighlightsSelectedColumns(t *testing.T) {
 }
 
 func TestFitViewportLinesPreservesStyledUnselectedRowsDuringSelection(t *testing.T) {
-	oldProfile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() {
-		lipgloss.SetColorProfile(oldProfile)
-	})
-
 	styled := lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Render("green")
 	lines := fitViewportLines(DefaultTheme(), &paneViewport{
 		Lines:             []string{styled, styled},
@@ -280,12 +255,6 @@ func TestFitViewportLinesPreservesStyledUnselectedRowsDuringSelection(t *testing
 }
 
 func TestFitViewportLinesHighlightsSelectedAndMarkedRows(t *testing.T) {
-	oldProfile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() {
-		lipgloss.SetColorProfile(oldProfile)
-	})
-
 	lines := fitViewportLines(DefaultTheme(), &paneViewport{
 		Lines:       []string{"one", "two", "three"},
 		SelectedRow: 1,
