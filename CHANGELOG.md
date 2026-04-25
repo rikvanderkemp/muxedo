@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.18](https://github.com/rikvanderkemp/muxedo/compare/v0.1.17...v0.1.18) (2026-04-25)
+
+
+### Features
+
+* **ui:** add charming startup spinners ([#53](https://github.com/rikvanderkemp/muxedo/issues/53)) ([eff3cb2](https://github.com/rikvanderkemp/muxedo/commit/eff3cb2121bbb2c738ba63f9d53ab5e26b617d54))
+
 ## [0.1.17](https://github.com/rikvanderkemp/muxedo/compare/v0.1.16...v0.1.17) (2026-04-18)
 
 
