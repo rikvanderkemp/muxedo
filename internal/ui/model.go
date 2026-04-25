@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -44,7 +45,6 @@ type startupItem struct {
 	Label       string
 	Mode        profile.StartupMode
 	Status      startupStatus
-	Spinner     int
 	ExitCode    int
 	HasExitCode bool
 	ErrorText   string
@@ -77,6 +77,36 @@ type panelSelection struct {
 	StartCol       int
 	EndRow         int
 	EndCol         int
+}
+
+type scrollState struct {
+	Offset         int
+	SelectedLineID uint64
+	SelectedLineKey uint64
+	SelectedIndex  int
+	Marks          []scrollMark
+	Tracker        lineTracker
+}
+
+type scrollMark struct {
+	LineKey   uint64
+	LineID    uint64
+	Text      string
+	PlainText string
+	CreatedAt time.Time
+}
+
+type lineTracker struct {
+	NextKey uint64
+	Lines   []trackedLine
+}
+
+type trackedLine struct {
+	Key          uint64
+	HistoryID    uint64
+	Text         string
+	PlainText    string
+	HistoryIndex int
 }
 
 const maxStartupLogLineBytes = 1 << 20 // 1 MiB
@@ -113,9 +143,7 @@ type Model struct {
 	panelScrollMode  bool
 	panelSelectMode  bool
 	prevPanelRunning []bool // per-panel running state last tick; detects run→stop while focused
-	scrollOffsets    []int
-	scrollSelections []int
-	scrollMarks      []uint64
+	scrollStates     []scrollState
 	selections       []panelSelection
 	sendInput        func(*process.Panel, []byte) error
 	panelRunning     func(*process.Panel) bool
@@ -137,6 +165,7 @@ type Model struct {
 	startupCompleted bool
 	startupSpecs     []profile.StartupSpec
 	startupItems     []startupItem
+	startupSpinner   spinner.Model
 	panelSpecs       []profile.PanelSpec
 	scrollbackConfig profile.ScrollbackConfig
 	msgChan          chan tea.Msg
@@ -177,10 +206,14 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 }
 
 func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
+	s := spinner.New(spinner.WithSpinner(spinner.Dot))
+	s.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
+
 	return Model{
 		title:            title,
 		startupSpecs:     startup,
 		startupItems:     newStartupItems(startup),
+		startupSpinner:   s,
 		panelSpecs:       panels,
 		scrollbackConfig: sb,
 		theme:            theme,
@@ -229,7 +262,7 @@ func (m Model) Init() tea.Cmd {
 	if m.startupCompleted {
 		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
 	}
-	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
+	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle), m.startupSpinner.Tick)
 }
 
 func (m Model) startupSequence() tea.Msg {
@@ -399,9 +432,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.HasExitCode = msg.hasExitCode
 			item.ExitCode = msg.exitCode
 			item.ErrorText = msg.errText
-			if msg.status != startupStatusRunning {
-				item.Spinner = 0
-			}
 			m.startupItems[msg.idx] = item
 		}
 		return m, m.waitForMsg
@@ -411,6 +441,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showBuffer = false
 		m.resizePanels()
 		return m, m.waitForMsg
+	case spinner.TickMsg:
+		if m.startupCompleted {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.startupSpinner, cmd = m.startupSpinner.Update(msg)
+		return m, cmd
 	}
 
 	if m.killingPanel {
@@ -525,6 +562,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := m.restartPanel(p); err != nil {
 						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
 					}
+					m.clearScrollState(m.activePanel)
 					m.resizePanels()
 					return m, nil
 				}
@@ -597,6 +635,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := m.restartPanel(p); err != nil {
 						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
 					}
+					m.clearScrollState(m.activePanel)
 					m.resizePanels()
 					return m, nil
 				case 'x', 'X':
@@ -654,6 +693,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case tea.MouseButtonWheelDown:
 					m.scrollViewportBy(3)
 					return m, nil
+				case tea.MouseButtonLeft:
+					if row, _, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
+						m.selectScrollLineAtViewportRow(row)
+						return m, nil
+					}
 				}
 			}
 		}
@@ -670,11 +714,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case tickMsg:
-		for i := range m.startupItems {
-			if m.startupItems[i].Status == startupStatusRunning {
-				m.startupItems[i].Spinner = (m.startupItems[i].Spinner + 1) % len(startupSpinnerFrames)
-			}
-		}
 		n := len(m.panels)
 		if len(m.prevPanelRunning) != n {
 			m.prevPanelRunning = make([]bool, n)
@@ -989,30 +1028,22 @@ func (m Model) visibleMaximizedPanel() (int, bool) {
 
 func (m *Model) ensureScrollState() {
 	n := len(m.panels)
-	if len(m.scrollOffsets) != n {
-		m.scrollOffsets = resizeIntSlice(m.scrollOffsets, n, 0)
-	}
-	if len(m.scrollSelections) != n {
-		m.scrollSelections = resizeIntSlice(m.scrollSelections, n, -1)
-	}
-	if len(m.scrollMarks) != n {
-		m.scrollMarks = resizeUint64Slice(m.scrollMarks, n)
+	if len(m.scrollStates) != n {
+		m.scrollStates = resizeScrollStateSlice(m.scrollStates, n)
 	}
 	if len(m.selections) != n {
 		m.selections = resizeSelectionSlice(m.selections, n)
 	}
 }
 
-func resizeIntSlice(prev []int, n int, fill int) []int {
-	out := make([]int, n)
+func resizeScrollStateSlice(prev []scrollState, n int) []scrollState {
+	out := make([]scrollState, n)
 	copy(out, prev)
 	for i := len(prev); i < n; i++ {
-		out[i] = fill
+		out[i].SelectedIndex = -1
 	}
 	return out
 }
-
-var startupSpinnerFrames = []string{"-", "\\", "|", "/"}
 
 func (m Model) formatStartupLog(idx int, line string) string {
 	if idx < 0 || idx >= len(m.startupItems) {
@@ -1061,36 +1092,44 @@ func (m Model) renderStartupStatusLines() []string {
 	}
 	lines := make([]string, 0, len(m.startupItems)+1)
 	lines = append(lines, "Startup status:")
+	runningSpinner := m.startupSpinner.View()
 	for _, item := range m.startupItems {
-		lines = append(lines, formatStartupStatusLine(item))
+		lines = append(lines, formatStartupStatusLine(m.theme, item, runningSpinner))
 	}
 	return lines
 }
 
-func formatStartupStatusLine(item startupItem) string {
-	prefix := fmt.Sprintf("Starting %s [%s]", item.Label, item.Mode)
+func formatStartupStatusLine(theme Theme, item startupItem, runningSpinner string) string {
+	okIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true).Render("✓")
+	errIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("✗")
+	pendingIcon := lipgloss.NewStyle().Foreground(theme.color(theme.StatusHintFG)).Render("…")
+
+	base := fmt.Sprintf("%s [%s]", item.Label, item.Mode)
 	switch item.Status {
 	case startupStatusOK:
-		return fmt.Sprintf("%s -> OK (%d)", prefix, item.ExitCode)
-	case startupStatusError:
 		if item.HasExitCode {
-			return fmt.Sprintf("%s -> ERROR (%d)", prefix, item.ExitCode)
+			return fmt.Sprintf("%s %s %d", okIcon, base, item.ExitCode)
+		}
+		return fmt.Sprintf("%s %s", okIcon, base)
+	case startupStatusError:
+		if item.HasExitCode && item.ErrorText != "" {
+			return fmt.Sprintf("%s %s %d · %s", errIcon, base, item.ExitCode, item.ErrorText)
+		}
+		if item.HasExitCode {
+			return fmt.Sprintf("%s %s %d", errIcon, base, item.ExitCode)
 		}
 		if item.ErrorText != "" {
-			return fmt.Sprintf("%s -> ERROR (%s)", prefix, item.ErrorText)
+			return fmt.Sprintf("%s %s · %s", errIcon, base, item.ErrorText)
 		}
-		return prefix + " -> ERROR"
+		return fmt.Sprintf("%s %s", errIcon, base)
 	case startupStatusRunning:
-		return fmt.Sprintf("%s -> %s", prefix, startupSpinnerFrames[item.Spinner%len(startupSpinnerFrames)])
+		if runningSpinner == "" {
+			runningSpinner = "…"
+		}
+		return fmt.Sprintf("%s %s", runningSpinner, base)
 	default:
-		return prefix + " -> queued"
+		return fmt.Sprintf("%s %s queued", pendingIcon, base)
 	}
-}
-
-func resizeUint64Slice(prev []uint64, n int) []uint64 {
-	out := make([]uint64, n)
-	copy(out, prev)
-	return out
 }
 
 func resizeSelectionSlice(prev []panelSelection, n int) []panelSelection {
@@ -1111,15 +1150,19 @@ func (m *Model) enterScrollMode() {
 	lines := m.historyLines(m.panels[idx])
 	total := len(lines)
 	if total == 0 {
-		m.scrollOffsets[idx] = 0
-		m.scrollSelections[idx] = -1
+		m.scrollStates[idx].Offset = 0
+		m.scrollStates[idx].SelectedLineID = 0
+		m.scrollStates[idx].SelectedLineKey = 0
+		m.scrollStates[idx].SelectedIndex = -1
 		return
 	}
 
+	_, hadValidSelection := findLineIndexByID(lines, m.scrollStates[idx].SelectedLineID)
 	m.reconcileScrollState(idx, lines)
-	if m.scrollSelections[idx] < 0 || m.scrollSelections[idx] >= total {
-		m.scrollSelections[idx] = total - 1
+	if !hadValidSelection {
+		m.selectFirstVisibleHistoryLine(idx, lines)
 	}
+	m.ensureSelectionVisible(idx, total)
 }
 
 func (m *Model) enterSelectMode() {
@@ -1269,21 +1312,8 @@ func (m *Model) scrollViewportBy(delta int) {
 
 	pageSize := max(1, m.activePaneLineCapacity())
 	maxOffset := max(0, len(lines)-pageSize)
-	m.scrollOffsets[idx] = clamp(m.scrollOffsets[idx]-delta, 0, maxOffset)
-
-	start := m.viewportStart(len(lines), pageSize, m.scrollOffsets[idx])
-	end := min(len(lines), start+pageSize)
-	if end <= start {
-		m.scrollSelections[idx] = -1
-		return
-	}
-
-	if m.scrollSelections[idx] < start {
-		m.scrollSelections[idx] = start
-	}
-	if m.scrollSelections[idx] >= end {
-		m.scrollSelections[idx] = end - 1
-	}
+	m.scrollStates[idx].Offset = clamp(m.scrollStates[idx].Offset-delta, 0, maxOffset)
+	m.selectVisibleLineAfterScroll(idx, lines)
 }
 
 func (m *Model) moveSelectionBy(delta int) {
@@ -1299,10 +1329,12 @@ func (m *Model) moveSelectionBy(delta int) {
 		return
 	}
 
-	if m.scrollSelections[idx] < 0 || m.scrollSelections[idx] >= len(lines) {
-		m.scrollSelections[idx] = len(lines) - 1
+	st := &m.scrollStates[idx]
+	if st.SelectedIndex < 0 || st.SelectedIndex >= len(lines) {
+		m.setScrollSelection(idx, lines, len(lines)-1)
+	} else {
+		m.setScrollSelection(idx, lines, clamp(st.SelectedIndex+delta, 0, len(lines)-1))
 	}
-	m.scrollSelections[idx] = clamp(m.scrollSelections[idx]+delta, 0, len(lines)-1)
 	m.ensureSelectionVisible(idx, len(lines))
 }
 
@@ -1322,7 +1354,7 @@ func (m *Model) jumpSelectionTo(target int) {
 	if target < 0 {
 		target = len(lines) - 1
 	}
-	m.scrollSelections[idx] = clamp(target, 0, len(lines)-1)
+	m.setScrollSelection(idx, lines, clamp(target, 0, len(lines)-1))
 	m.ensureSelectionVisible(idx, len(lines))
 }
 
@@ -1335,24 +1367,50 @@ func (m *Model) toggleMark() {
 	idx := m.activePanel
 	lines := m.historyLines(m.panels[idx])
 	m.reconcileScrollState(idx, lines)
-	sel := m.scrollSelections[idx]
+	if len(lines) == 0 {
+		return
+	}
+
+	st := &m.scrollStates[idx]
+	sel := st.SelectedIndex
 	if sel < 0 || sel >= len(lines) {
 		return
 	}
 
-	if m.scrollMarks[idx] == lines[sel].ID {
-		m.clearMark(idx)
-		return
+	tracked := st.Tracker.Lines[sel]
+	lineKey := tracked.Key
+	for i, mark := range st.Marks {
+		if mark.LineKey == lineKey {
+			st.Marks = append(st.Marks[:i], st.Marks[i+1:]...)
+			return
+		}
 	}
-	m.scrollMarks[idx] = lines[sel].ID
+	st.Marks = append(st.Marks, scrollMark{
+		LineKey:   lineKey,
+		LineID:    tracked.HistoryID,
+		Text:      tracked.Text,
+		PlainText: tracked.PlainText,
+		CreatedAt: time.Now(),
+	})
 }
 
 func (m *Model) ensureSelectionVisible(idx, total int) {
 	pageSize := max(1, m.activePaneLineCapacity())
-	maxOffset := max(0, total-pageSize)
-	start := m.viewportStart(total, pageSize, m.scrollOffsets[idx])
-	end := min(total, start+pageSize)
-	sel := m.scrollSelections[idx]
+	lines := m.historyLines(m.panels[idx])
+	if len(lines) != total {
+		total = len(lines)
+	}
+	if total == 0 {
+		return
+	}
+	rows := m.historyDisplayRows(idx, lines)
+	maxOffset := max(0, len(rows)-pageSize)
+	start := m.viewportStart(len(rows), pageSize, m.scrollStates[idx].Offset)
+	end := min(len(rows), start+pageSize)
+	sel := m.displayRowIndexForSelectedLine(idx, rows)
+	if sel < 0 {
+		return
+	}
 
 	if sel < start {
 		start = sel
@@ -1360,45 +1418,148 @@ func (m *Model) ensureSelectionVisible(idx, total int) {
 		start = sel - pageSize + 1
 	}
 	start = clamp(start, 0, maxOffset)
-	m.scrollOffsets[idx] = maxOffset - start
+	m.scrollStates[idx].Offset = maxOffset - start
 }
 
 func (m *Model) reconcileScrollState(idx int, lines []process.HistoryLine) {
 	total := len(lines)
 	pageSize := max(1, m.activePaneLineCapacity())
 	maxOffset := max(0, total-pageSize)
-	m.scrollOffsets[idx] = clamp(m.scrollOffsets[idx], 0, maxOffset)
+	st := &m.scrollStates[idx]
+	st.Offset = clamp(st.Offset, 0, maxOffset)
 
 	if total == 0 {
-		m.scrollSelections[idx] = -1
-		m.clearMark(idx)
+		st.SelectedLineID = 0
+		st.SelectedLineKey = 0
+		st.SelectedIndex = -1
+		st.Tracker.Lines = nil
 		return
 	}
 
-	if m.scrollSelections[idx] >= total {
-		m.scrollSelections[idx] = total - 1
-	}
-	if m.scrollSelections[idx] < -1 {
-		m.scrollSelections[idx] = -1
+	m.reconcileLineTracker(idx, lines)
+
+	if st.SelectedLineKey != 0 {
+		if selected, ok := findTrackedLineIndexByKey(st.Tracker.Lines, st.SelectedLineKey); ok {
+			st.SelectedIndex = selected
+			st.SelectedLineID = st.Tracker.Lines[selected].HistoryID
+			return
+		}
 	}
 
+	if st.SelectedLineID != 0 {
+		if selected, ok := findLineIndexByID(lines, st.SelectedLineID); ok {
+			st.SelectedIndex = selected
+			st.SelectedLineKey = st.Tracker.Lines[selected].Key
+			return
+		}
+	}
+
+	if st.SelectedIndex >= total {
+		st.SelectedIndex = total - 1
+	}
+	if st.SelectedIndex < 0 {
+		st.SelectedIndex = -1
+		st.SelectedLineID = 0
+		st.SelectedLineKey = 0
+		return
+	}
+	st.SelectedLineID = lines[st.SelectedIndex].ID
+	st.SelectedLineKey = st.Tracker.Lines[st.SelectedIndex].Key
+}
+
+func (m *Model) reconcileLineTracker(idx int, lines []process.HistoryLine) {
+	if idx < 0 || idx >= len(m.scrollStates) {
+		return
+	}
+	st := &m.scrollStates[idx]
+	if len(lines) == 0 {
+		st.Tracker.Lines = nil
+		return
+	}
+
+	prev := st.Tracker.Lines
+	next := make([]trackedLine, len(lines))
+	matchedPrev := make([]bool, len(prev))
+	matchedNext := make([]bool, len(lines))
+
+	assign := func(nextIdx, prevIdx int) {
+		if nextIdx < 0 || nextIdx >= len(lines) || prevIdx < 0 || prevIdx >= len(prev) {
+			return
+		}
+		line := lines[nextIdx]
+		next[nextIdx] = trackedLine{
+			Key:          prev[prevIdx].Key,
+			HistoryID:    line.ID,
+			Text:         line.Text,
+			PlainText:    ansi.Strip(line.Text),
+			HistoryIndex: nextIdx,
+		}
+		matchedPrev[prevIdx] = true
+		matchedNext[nextIdx] = true
+	}
+
+	prevSignatures := trackedLineSignatures(prev)
+	nextSignatures := historyLineSignatures(lines)
+	if overlap := longestStringSuffixPrefixOverlap(prevSignatures, nextSignatures); overlap > 0 {
+		prevStart := len(prev) - overlap
+		for i := 0; i < overlap; i++ {
+			assign(i, prevStart+i)
+		}
+	}
+
+	prevIDText := uniqueTrackedLineIDTextIndexes(prev, matchedPrev)
+	nextIDText := uniqueHistoryLineIDTextIndexes(lines, matchedNext)
+	for sig, prevIdx := range prevIDText {
+		nextIdx, ok := nextIDText[sig]
+		if !ok || matchedPrev[prevIdx] || matchedNext[nextIdx] {
+			continue
+		}
+		assign(nextIdx, prevIdx)
+	}
+
+	prevText := uniqueTrackedLineTextIndexes(prev, matchedPrev)
+	nextText := uniqueHistoryLineTextIndexes(lines, matchedNext)
+	for text, prevIdx := range prevText {
+		nextIdx, ok := nextText[text]
+		if !ok || matchedPrev[prevIdx] || matchedNext[nextIdx] {
+			continue
+		}
+		assign(nextIdx, prevIdx)
+	}
+
+	for i, line := range lines {
+		if matchedNext[i] {
+			continue
+		}
+		st.Tracker.NextKey++
+		next[i] = trackedLine{
+			Key:          st.Tracker.NextKey,
+			HistoryID:    line.ID,
+			Text:         line.Text,
+			PlainText:    ansi.Strip(line.Text),
+			HistoryIndex: i,
+		}
+	}
+
+	st.Tracker.Lines = next
 }
 
 func (m *Model) viewportForPanel(idx, height int) *paneViewport {
-	if idx != m.activePanel {
-		return nil
-	}
 	if idx < 0 || idx >= len(m.panels) {
 		return nil
 	}
 
 	m.ensureScrollState()
 	pageSize := max(1, paneLineCapacity(height))
-	if m.panelSelectMode {
+	active := idx == m.activePanel
+	if active && m.panelSelectMode {
 		return m.selectViewportForPanel(idx, pageSize)
 	}
-	if !m.panelScrollMode {
+	if active && m.panelInsertMode {
 		return nil
+	}
+	if !active || !m.panelScrollMode {
+		return m.liveBookmarkedViewportForPanel(idx, pageSize)
 	}
 	return m.historyViewportForPanel(idx, pageSize)
 }
@@ -1407,43 +1568,87 @@ func (m *Model) historyViewportForPanel(idx, pageSize int) *paneViewport {
 	history := m.historyLines(m.panels[idx])
 	if len(history) == 0 {
 		m.reconcileScrollState(idx, history)
-		return &paneViewport{Lines: make([]string, pageSize), SelectedRow: -1, MarkedRow: -1}
+		return &paneViewport{Lines: make([]string, pageSize), SelectedRow: -1}
 	}
 	m.reconcileScrollState(idx, history)
 
-	start := m.viewportStart(len(history), pageSize, m.scrollOffsets[idx])
-	end := min(len(history), start+pageSize)
+	rows := m.historyDisplayRows(idx, history)
+	start := m.viewportStart(len(rows), pageSize, m.scrollStates[idx].Offset)
+	end := min(len(rows), start+pageSize)
 	selectedRow := -1
-	if sel := m.scrollSelections[idx]; sel >= start && sel < end {
-		selectedRow = sel - start
+	if selected := m.displayRowIndexForSelectedLine(idx, rows); selected >= start && selected < end {
+		selectedRow = selected - start
 	}
-	markedRow := -1
-	if markID := m.scrollMarks[idx]; markID != 0 {
-		if mark, ok := findLineIndexByID(history, markID); ok && mark >= start && mark < end {
-			markedRow = mark - start
+
+	return viewportFromRows(rows[start:end], selectedRow)
+}
+
+func (m *Model) liveBookmarkedViewportForPanel(idx, pageSize int) *paneViewport {
+	if idx < 0 || idx >= len(m.scrollStates) || len(m.scrollStates[idx].Marks) == 0 {
+		return nil
+	}
+	history := m.historyLines(m.panels[idx])
+	if len(history) == 0 {
+		return nil
+	}
+	m.reconcileScrollState(idx, history)
+
+	view := m.displayForView(m.panels[idx])
+	rawLines, _ := visibleViewportLines(view.Output, pageSize, -1)
+	start, ok := displayHistoryStart(history, rawLines)
+	if !ok {
+		// Best-effort fallback: treat visible terminal lines as tail of history.
+		// This preserves live-rendered text while still applying bookmark IDs.
+		start = len(history) - len(rawLines)
+		if start < 0 {
+			start = 0
 		}
 	}
 
-	viewportLines := make([]string, 0, end-start)
-	for _, line := range history[start:end] {
-		viewportLines = append(viewportLines, line.Text)
+	marks := m.scrollMarksByLineKey(idx)
+	if len(marks) == 0 {
+		return nil
 	}
-
-	return &paneViewport{
-		Lines:       viewportLines,
-		PlainLines:  append([]string(nil), viewportLines...),
-		SelectedRow: selectedRow,
-		MarkedRow:   markedRow,
+	rows := make([]paneViewportRow, 0, pageSize)
+	hasBookmark := false
+	for i := 0; i < pageSize; i++ {
+		line := ""
+		if i < len(rawLines) {
+			line = rawLines[i]
+		}
+		historyIndex := start + i
+		var lineID, lineKey uint64
+		bookmarked := false
+		if i < len(rawLines) && historyIndex >= 0 && historyIndex < len(m.scrollStates[idx].Tracker.Lines) {
+			tracked := m.scrollStates[idx].Tracker.Lines[historyIndex]
+			lineID = tracked.HistoryID
+			lineKey = tracked.Key
+			_, bookmarked = marks[lineKey]
+			hasBookmark = hasBookmark || bookmarked
+		}
+		rows = append(rows, paneViewportRow{
+			Line:         line,
+			PlainLine:    ansi.Strip(line),
+			HistoryIndex: historyIndex,
+			LineID:       lineID,
+			LineKey:      lineKey,
+			Bookmarked:   bookmarked,
+		})
 	}
+	if !hasBookmark {
+		return nil
+	}
+	return viewportFromRows(rows, -1)
 }
 
 func (m *Model) selectViewportForPanel(idx, pageSize int) *paneViewport {
-	lines, plainLines := m.selectionLinesForPanel(idx, pageSize)
+	rows := m.selectionRowsForPanel(idx, pageSize)
+	lines, plainLines := viewportLines(rows, pageSize)
 	vp := &paneViewport{
+		Rows:        rows,
 		Lines:       lines,
 		PlainLines:  plainLines,
 		SelectedRow: -1,
-		MarkedRow:   -1,
 	}
 	if idx >= len(m.selections) {
 		return vp
@@ -1471,8 +1676,13 @@ func (m *Model) selectViewportForPanel(idx, pageSize int) *paneViewport {
 }
 
 func (m *Model) selectionLinesForPanel(idx, pageSize int) ([]string, []string) {
+	rows := m.selectionRowsForPanel(idx, pageSize)
+	return viewportLines(rows, pageSize)
+}
+
+func (m *Model) selectionRowsForPanel(idx, pageSize int) []paneViewportRow {
 	if idx < 0 || idx >= len(m.panels) {
-		return nil, nil
+		return nil
 	}
 	width := m.activePaneContentWidth()
 	if width <= 0 {
@@ -1481,37 +1691,35 @@ func (m *Model) selectionLinesForPanel(idx, pageSize int) ([]string, []string) {
 	if idx < len(m.selections) && m.selections[idx].Source == selectSourceHistory {
 		history := m.historyLines(m.panels[idx])
 		if len(history) == 0 {
-			lines := make([]string, pageSize)
-			return lines, append([]string(nil), lines...)
+			return blankViewportRows(pageSize, width)
 		}
 		m.reconcileScrollState(idx, history)
-		start := m.viewportStart(len(history), pageSize, m.scrollOffsets[idx])
-		end := min(len(history), start+pageSize)
-		lines := make([]string, 0, pageSize)
-		for _, line := range history[start:end] {
-			lines = append(lines, padOrTruncate(line.Text, width))
-		}
-		for len(lines) < pageSize {
-			lines = append(lines, strings.Repeat(" ", width))
-		}
-		return lines, append([]string(nil), lines...)
+		rows := m.historyDisplayRows(idx, history)
+		start := m.viewportStart(len(rows), pageSize, m.scrollStates[idx].Offset)
+		end := min(len(rows), start+pageSize)
+		return padViewportRows(rows[start:end], pageSize, width)
 	}
 
 	view := m.displayForView(m.panels[idx])
 	rawLines, _ := visibleViewportLines(view.Output, pageSize, -1)
-	lines := make([]string, pageSize)
-	plainLines := make([]string, pageSize)
+	rows := make([]paneViewportRow, pageSize)
 	for i := 0; i < pageSize; i++ {
 		if i < len(rawLines) {
-			lines[i] = padOrTruncate(rawLines[i], width)
-			plainLines[i] = padOrTruncate(ansi.Strip(rawLines[i]), width)
+			rows[i] = paneViewportRow{
+				Line:         padOrTruncate(rawLines[i], width),
+				PlainLine:    padOrTruncate(ansi.Strip(rawLines[i]), width),
+				HistoryIndex: i,
+			}
 			continue
 		}
 		fill := strings.Repeat(" ", width)
-		lines[i] = fill
-		plainLines[i] = fill
+		rows[i] = paneViewportRow{
+			Line:         fill,
+			PlainLine:    fill,
+			HistoryIndex: i,
+		}
 	}
-	return lines, plainLines
+	return rows
 }
 
 func (m Model) activePaneContentWidth() int {
@@ -1584,13 +1792,13 @@ func (m *Model) currentSelectionText() string {
 	if !sel.Active {
 		return ""
 	}
-	_, lines := m.selectionLinesForPanel(idx, m.activePaneLineCapacity())
-	if len(lines) == 0 {
+	rows := m.selectionRowsForPanel(idx, m.activePaneLineCapacity())
+	if len(rows) == 0 {
 		return ""
 	}
 	startRow, startCol, endRow, endCol := normalizeSelection(sel.StartRow, sel.StartCol, sel.EndRow, sel.EndCol)
-	startRow = clamp(startRow, 0, len(lines)-1)
-	endRow = clamp(endRow, 0, len(lines)-1)
+	startRow = clamp(startRow, 0, len(rows)-1)
+	endRow = clamp(endRow, 0, len(rows)-1)
 	width := m.activePaneContentWidth()
 	if width <= 0 {
 		width = 1
@@ -1608,9 +1816,197 @@ func (m *Model) currentSelectionText() string {
 		if row == endRow {
 			lineEnd = endCol + 1
 		}
-		selected = append(selected, strings.TrimRight(sliceByCells(lines[row], lineStart, lineEnd), " "))
+		selected = append(selected, strings.TrimRight(sliceByCells(rows[row].PlainLine, lineStart, lineEnd), " "))
 	}
 	return strings.Join(selected, "\n")
+}
+
+func (m *Model) clearScrollState(idx int) {
+	m.ensureScrollState()
+	if idx < 0 || idx >= len(m.scrollStates) {
+		return
+	}
+	m.scrollStates[idx] = scrollState{SelectedIndex: -1}
+	if idx < len(m.selections) {
+		m.selections[idx] = panelSelection{}
+	}
+}
+
+func (m *Model) setScrollSelection(idx int, lines []process.HistoryLine, selected int) {
+	if idx < 0 || idx >= len(m.scrollStates) || len(lines) == 0 {
+		return
+	}
+	m.reconcileLineTracker(idx, lines)
+	selected = clamp(selected, 0, len(lines)-1)
+	m.scrollStates[idx].SelectedIndex = selected
+	m.scrollStates[idx].SelectedLineID = lines[selected].ID
+	m.scrollStates[idx].SelectedLineKey = m.scrollStates[idx].Tracker.Lines[selected].Key
+}
+
+func (m *Model) selectFirstVisibleHistoryLine(idx int, lines []process.HistoryLine) {
+	pageSize := max(1, m.activePaneLineCapacity())
+	rows := m.historyDisplayRows(idx, lines)
+	start := m.viewportStart(len(rows), pageSize, m.scrollStates[idx].Offset)
+	end := min(len(rows), start+pageSize)
+	for _, row := range rows[start:end] {
+		if row.HistoryIndex >= 0 {
+			m.setScrollSelection(idx, lines, row.HistoryIndex)
+			return
+		}
+	}
+	if len(lines) > 0 {
+		m.setScrollSelection(idx, lines, 0)
+	}
+}
+
+func (m *Model) selectVisibleLineAfterScroll(idx int, lines []process.HistoryLine) {
+	pageSize := max(1, m.activePaneLineCapacity())
+	rows := m.historyDisplayRows(idx, lines)
+	start := m.viewportStart(len(rows), pageSize, m.scrollStates[idx].Offset)
+	end := min(len(rows), start+pageSize)
+	selected := m.displayRowIndexForSelectedLine(idx, rows)
+	if selected >= start && selected < end {
+		return
+	}
+
+	if selected < start {
+		for row := start; row < end; row++ {
+			if rows[row].HistoryIndex >= 0 {
+				m.setScrollSelection(idx, lines, rows[row].HistoryIndex)
+				return
+			}
+		}
+	} else {
+		for row := end - 1; row >= start; row-- {
+			if rows[row].HistoryIndex >= 0 {
+				m.setScrollSelection(idx, lines, rows[row].HistoryIndex)
+				return
+			}
+		}
+	}
+}
+
+func (m *Model) selectScrollLineAtViewportRow(row int) {
+	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
+		return
+	}
+	m.ensureScrollState()
+	idx := m.activePanel
+	lines := m.historyLines(m.panels[idx])
+	m.reconcileScrollState(idx, lines)
+	if len(lines) == 0 {
+		return
+	}
+
+	pageSize := max(1, m.activePaneLineCapacity())
+	rows := m.historyDisplayRows(idx, lines)
+	start := m.viewportStart(len(rows), pageSize, m.scrollStates[idx].Offset)
+	displayRow := start + row
+	if displayRow < 0 || displayRow >= len(rows) {
+		return
+	}
+	if rows[displayRow].HistoryIndex < 0 {
+		return
+	}
+	m.setScrollSelection(idx, lines, rows[displayRow].HistoryIndex)
+}
+
+func (m *Model) displayRowIndexForSelectedLine(idx int, rows []paneViewportRow) int {
+	if idx < 0 || idx >= len(m.scrollStates) {
+		return -1
+	}
+	selected := m.scrollStates[idx].SelectedIndex
+	if selected < 0 {
+		return -1
+	}
+	selectedKey := m.scrollStates[idx].SelectedLineKey
+	for i, row := range rows {
+		if selectedKey != 0 && row.LineKey == selectedKey {
+			return i
+		}
+		if row.HistoryIndex == selected {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *Model) historyDisplayRows(idx int, lines []process.HistoryLine) []paneViewportRow {
+	m.reconcileLineTracker(idx, lines)
+	marks := m.scrollMarksByLineKey(idx)
+	rows := make([]paneViewportRow, 0, len(lines))
+	for i, line := range lines {
+		tracked := m.scrollStates[idx].Tracker.Lines[i]
+		_, bookmarked := marks[tracked.Key]
+		rows = append(rows, paneViewportRow{
+			Line:         line.Text,
+			PlainLine:    ansi.Strip(line.Text),
+			HistoryIndex: i,
+			LineID:       tracked.HistoryID,
+			LineKey:      tracked.Key,
+			Bookmarked:   bookmarked,
+		})
+	}
+	return rows
+}
+
+func (m *Model) scrollMarksByLineKey(idx int) map[uint64]scrollMark {
+	if idx < 0 || idx >= len(m.scrollStates) || len(m.scrollStates[idx].Marks) == 0 {
+		return nil
+	}
+	marks := make(map[uint64]scrollMark, len(m.scrollStates[idx].Marks))
+	for _, mark := range m.scrollStates[idx].Marks {
+		if mark.LineKey != 0 {
+			marks[mark.LineKey] = mark
+			continue
+		}
+		if mark.LineID == 0 {
+			continue
+		}
+		if line, ok := findTrackedLineByHistoryID(m.scrollStates[idx].Tracker.Lines, mark.LineID); ok {
+			marks[line.Key] = mark
+		}
+	}
+	return marks
+}
+
+func viewportFromRows(rows []paneViewportRow, selectedRow int) *paneViewport {
+	lines, plainLines := viewportLines(rows, len(rows))
+	return &paneViewport{
+		Rows:        rows,
+		Lines:       lines,
+		PlainLines:  plainLines,
+		SelectedRow: selectedRow,
+	}
+}
+
+func viewportLines(rows []paneViewportRow, pageSize int) ([]string, []string) {
+	lines := make([]string, pageSize)
+	plainLines := make([]string, pageSize)
+	for i := 0; i < pageSize; i++ {
+		if i < len(rows) {
+			lines[i] = rows[i].Line
+			plainLines[i] = rows[i].PlainLine
+		}
+	}
+	return lines, plainLines
+}
+
+func padViewportRows(rows []paneViewportRow, pageSize, width int) []paneViewportRow {
+	out := append([]paneViewportRow(nil), rows...)
+	for len(out) < pageSize {
+		fill := strings.Repeat(" ", width)
+		out = append(out, paneViewportRow{
+			Line:         fill,
+			PlainLine:    fill,
+			HistoryIndex: -1,
+		})
+	}
+	return out
+}
+
+func blankViewportRows(pageSize, width int) []paneViewportRow {
+	return padViewportRows(nil, pageSize, width)
 }
 
 func (m Model) viewportStart(total, pageSize, offset int) int {
@@ -1622,10 +2018,6 @@ func (m Model) viewportStart(total, pageSize, offset int) int {
 	return total - pageSize - offset
 }
 
-func (m *Model) clearMark(idx int) {
-	m.scrollMarks[idx] = 0
-}
-
 func findLineIndexByID(lines []process.HistoryLine, want uint64) (int, bool) {
 	for i, line := range lines {
 		if line.ID == want {
@@ -1633,6 +2025,167 @@ func findLineIndexByID(lines []process.HistoryLine, want uint64) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+func findTrackedLineIndexByKey(lines []trackedLine, want uint64) (int, bool) {
+	for i, line := range lines {
+		if line.Key == want {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func findTrackedLineByHistoryID(lines []trackedLine, want uint64) (trackedLine, bool) {
+	for _, line := range lines {
+		if line.HistoryID == want {
+			return line, true
+		}
+	}
+	return trackedLine{}, false
+}
+
+func trackedLineSignatures(lines []trackedLine) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = line.Text
+	}
+	return out
+}
+
+func historyLineSignatures(lines []process.HistoryLine) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = line.Text
+	}
+	return out
+}
+
+type historyIDTextSignature struct {
+	ID   uint64
+	Text string
+}
+
+func uniqueTrackedLineIDTextIndexes(lines []trackedLine, matched []bool) map[historyIDTextSignature]int {
+	counts := make(map[historyIDTextSignature]int, len(lines))
+	indexes := make(map[historyIDTextSignature]int, len(lines))
+	for i, line := range lines {
+		if i < len(matched) && matched[i] {
+			continue
+		}
+		sig := historyIDTextSignature{ID: line.HistoryID, Text: line.Text}
+		counts[sig]++
+		indexes[sig] = i
+	}
+	return uniqueIndexes(counts, indexes)
+}
+
+func uniqueHistoryLineIDTextIndexes(lines []process.HistoryLine, matched []bool) map[historyIDTextSignature]int {
+	counts := make(map[historyIDTextSignature]int, len(lines))
+	indexes := make(map[historyIDTextSignature]int, len(lines))
+	for i, line := range lines {
+		if i < len(matched) && matched[i] {
+			continue
+		}
+		sig := historyIDTextSignature{ID: line.ID, Text: line.Text}
+		counts[sig]++
+		indexes[sig] = i
+	}
+	return uniqueIndexes(counts, indexes)
+}
+
+func uniqueIndexes[T comparable](counts map[T]int, indexes map[T]int) map[T]int {
+	out := make(map[T]int, len(indexes))
+	for sig, idx := range indexes {
+		if counts[sig] == 1 {
+			out[sig] = idx
+		}
+	}
+	return out
+}
+
+func uniqueTrackedLineTextIndexes(lines []trackedLine, matched []bool) map[string]int {
+	counts := make(map[string]int, len(lines))
+	indexes := make(map[string]int, len(lines))
+	for i, line := range lines {
+		if i < len(matched) && matched[i] {
+			continue
+		}
+		counts[line.Text]++
+		indexes[line.Text] = i
+	}
+	return uniqueIndexes(counts, indexes)
+}
+
+func uniqueHistoryLineTextIndexes(lines []process.HistoryLine, matched []bool) map[string]int {
+	counts := make(map[string]int, len(lines))
+	indexes := make(map[string]int, len(lines))
+	for i, line := range lines {
+		if i < len(matched) && matched[i] {
+			continue
+		}
+		counts[line.Text]++
+		indexes[line.Text] = i
+	}
+	return uniqueIndexes(counts, indexes)
+}
+
+func longestStringSuffixPrefixOverlap(text, pattern []string) int {
+	if len(text) == 0 || len(pattern) == 0 {
+		return 0
+	}
+
+	lps := make([]int, len(pattern))
+	for i, j := 1, 0; i < len(pattern); {
+		if pattern[i] == pattern[j] {
+			j++
+			lps[i] = j
+			i++
+			continue
+		}
+		if j > 0 {
+			j = lps[j-1]
+			continue
+		}
+		i++
+	}
+
+	matched := 0
+	for _, v := range text {
+		for matched > 0 && (matched == len(pattern) || v != pattern[matched]) {
+			matched = lps[matched-1]
+		}
+		if matched < len(pattern) && v == pattern[matched] {
+			matched++
+		}
+	}
+	return matched
+}
+
+func displayHistoryStart(history []process.HistoryLine, rawLines []string) (int, bool) {
+	if len(rawLines) == 0 {
+		return 0, false
+	}
+	if len(history) < len(rawLines) {
+		return 0, false
+	}
+	start := len(history) - len(rawLines)
+	for i, raw := range rawLines {
+		if normalizeDisplayLine(raw) != normalizeDisplayLine(history[start+i].Text) {
+			return 0, false
+		}
+	}
+	return start, true
+}
+
+func normalizeDisplayLine(line string) string {
+	return strings.TrimRight(ansi.Strip(line), " ")
 }
 
 func (m Model) gridPanelInnerSize() (int, int) {
