@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/rikvanderkemp/muxedo/internal/config"
 	"github.com/rikvanderkemp/muxedo/internal/update"
@@ -694,6 +694,7 @@ func stubStartupEnv(t *testing.T) func() {
 	originalExecSelf := execSelf
 
 	version = "v1.2.3"
+	newUpdater = func() updaterAPI { return updaterStub{} }
 	newStartupUpdater = func() updaterAPI { return newUpdater() }
 	runProgram = func(tea.Model) error { return nil }
 	promptInput = strings.NewReader("\n")

@@ -6,12 +6,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/rikvanderkemp/muxedo/internal/process"
@@ -35,8 +36,36 @@ func (m quitOnStartupCompleteModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m quitOnStartupCompleteModel) View() string {
+func (m quitOnStartupCompleteModel) View() tea.View {
 	return m.inner.View()
+}
+
+func keyRune(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: r, Text: string(r)}
+}
+
+func keySpecial(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code}
+}
+
+func keyCtrl(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl}
+}
+
+func mouseLeftClick(x, y int) tea.MouseClickMsg {
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func mouseWheel(x, y int, button tea.MouseButton) tea.MouseWheelMsg {
+	return tea.MouseWheelMsg{X: x, Y: y, Button: button}
+}
+
+func mouseMotion(x, y int, button tea.MouseButton) tea.MouseMotionMsg {
+	return tea.MouseMotionMsg{X: x, Y: y, Button: button}
+}
+
+func mouseRelease(x, y int, button tea.MouseButton) tea.MouseReleaseMsg {
+	return tea.MouseReleaseMsg{X: x, Y: y, Button: button}
 }
 
 func runProgramForTest(t *testing.T, model tea.Model, timeout time.Duration, send func(*tea.Program)) (tea.Model, error) {
@@ -81,12 +110,7 @@ func TestUpdateClickActivatesPanel(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	model = next.(Model)
 
-	next, _ = model.Update(tea.MouseMsg{
-		X:      1,
-		Y:      1,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseLeftClick(1, 1))
 	model = next.(Model)
 
 	if model.activePanel != 0 {
@@ -103,24 +127,14 @@ func TestStatusBarClickDoesNotActivatePanel(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: h})
 	model = next.(Model)
 
-	next, _ = model.Update(tea.MouseMsg{
-		X:      1,
-		Y:      h - 1,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseLeftClick(1, h-1))
 	model = next.(Model)
 
 	if model.activePanel != -1 {
 		t.Fatalf("expected no active panel after status bar click, got %d", model.activePanel)
 	}
 
-	next, _ = model.Update(tea.MouseMsg{
-		X:      1,
-		Y:      1,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseLeftClick(1, 1))
 	model = next.(Model)
 
 	if model.activePanel != 0 {
@@ -140,12 +154,7 @@ func TestStoppedPanelStaysActiveAcrossTickAfterClick(t *testing.T) {
 	next, _ = model.Update(tickMsg{})
 	model = next.(Model)
 
-	next, _ = model.Update(tea.MouseMsg{
-		X:      1,
-		Y:      1,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseLeftClick(1, 1))
 	model = next.(Model)
 	if model.activePanel != 0 {
 		t.Fatalf("expected pane 0 active after click, got %d", model.activePanel)
@@ -194,7 +203,7 @@ func TestEscapeFromNormalBlursPanel(t *testing.T) {
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ := model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 
 	if model.activePanel != -1 {
@@ -213,7 +222,7 @@ func TestEscapeFromMaximizedNormalRestoresGridAndBlursPanel(t *testing.T) {
 	model.maximizedPanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ := model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 
 	if model.activePanel != -1 {
@@ -234,19 +243,19 @@ func TestEscapeTrickleInsertToNormalThenBlur(t *testing.T) {
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ := model.Update(keyRune('i'))
 	model = next.(Model)
 	if !model.panelInsertMode || model.activePanel != 0 {
 		t.Fatalf("want insert + focused 0, got insert=%v panel=%d", model.panelInsertMode, model.activePanel)
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 	if model.panelInsertMode || model.activePanel != 0 {
 		t.Fatalf("want normal + focused after 1st Esc, got insert=%v panel=%d", model.panelInsertMode, model.activePanel)
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 	if model.activePanel != -1 || model.panelInsertMode {
 		t.Fatalf("want blurred after 2nd Esc, panel=%d insert=%v", model.activePanel, model.panelInsertMode)
@@ -268,7 +277,7 @@ func TestUpdateActivePanelCapturesKeyboard(t *testing.T) {
 		return nil
 	}
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, cmd := model.Update(keyRune('i'))
 	model = next.(Model)
 	if cmd != nil {
 		t.Fatalf("expected no cmd entering insert")
@@ -277,13 +286,13 @@ func TestUpdateActivePanelCapturesKeyboard(t *testing.T) {
 		t.Fatal("expected insert mode")
 	}
 
-	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd = model.Update(keyRune('q'))
 	model = next.(Model)
 	if cmd != nil {
 		t.Fatalf("expected no quit command while panel is active")
 	}
 
-	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd = model.Update(keyCtrl('c'))
 	model = next.(Model)
 	if cmd != nil {
 		t.Fatalf("expected ctrl+c to be ignored by active panel")
@@ -312,7 +321,7 @@ func TestStoppedPanelIgnoresNonReloadKeys(t *testing.T) {
 	}
 	model.panelRunning = func(p *process.Panel) bool { return false }
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next, cmd := model.Update(keyRune('a'))
 	_ = next.(Model)
 	if cmd != nil {
 		t.Fatalf("expected nil cmd for non-reload key on stopped panel")
@@ -335,7 +344,7 @@ func TestStoppedPanelRestartsOnR(t *testing.T) {
 	}
 	model.panelRunning = func(p *process.Panel) bool { return false }
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, cmd := model.Update(keyRune('r'))
 	_ = next.(Model)
 	if cmd != nil {
 		t.Fatalf("expected nil cmd on restart")
@@ -358,7 +367,7 @@ func TestStoppedPanelRestartsOnUpperR(t *testing.T) {
 	}
 	model.panelRunning = func(p *process.Panel) bool { return false }
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	next, cmd := model.Update(keyRune('R'))
 	_ = next.(Model)
 	if cmd != nil {
 		t.Fatalf("expected nil cmd on restart")
@@ -388,7 +397,7 @@ func TestRunningPanelNormalDoesNotForwardR(t *testing.T) {
 	}
 	model.panelRunning = func(p *process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, _ := model.Update(keyRune('r'))
 	_ = next.(Model)
 
 	if len(writes) != 0 {
@@ -414,9 +423,9 @@ func TestRunningPanelForwardsAfterInsert(t *testing.T) {
 	}
 	model.panelRunning = func(p *process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ := model.Update(keyRune('i'))
 	model = next.(Model)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, _ = model.Update(keyRune('r'))
 	_ = next.(Model)
 
 	if len(writes) != 1 || string(writes[0]) != "r" {
@@ -439,9 +448,9 @@ func TestRunningPanelForwardsMInInsertMode(t *testing.T) {
 	}
 	model.panelRunning = func(p *process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ := model.Update(keyRune('i'))
 	model = next.(Model)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ = model.Update(keyRune('m'))
 	model = next.(Model)
 
 	if model.maximizedPanel != -1 {
@@ -463,7 +472,7 @@ func TestRunningPanelInsertModeLogsSendInputError(t *testing.T) {
 		return io.ErrClosedPipe
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, _ := model.Update(keyRune('q'))
 	model = next.(Model)
 
 	if len(model.messageBuffer) != 1 {
@@ -487,7 +496,7 @@ func TestRunningPanelNormalSwallowsUnknownRune(t *testing.T) {
 	}
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, _ := model.Update(keyRune('x'))
 	_ = next.(Model)
 	if len(writes) != 0 {
 		t.Fatalf("expected no write in normal mode, got %v", writes)
@@ -566,20 +575,16 @@ func TestClickResetsInsertMode(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	model = next.(Model)
 
-	next, _ = model.Update(tea.MouseMsg{
-		X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseLeftClick(1, 1))
 	model = next.(Model)
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	next, _ = model.Update(keyRune('I'))
 	model = next.(Model)
 	if !model.panelInsertMode {
 		t.Fatal("expected insert after I")
 	}
 
-	next, _ = model.Update(tea.MouseMsg{
-		X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseLeftClick(1, 1))
 	model = next.(Model)
 	if model.panelInsertMode {
 		t.Fatal("expected normal mode after re-click panel")
@@ -591,7 +596,7 @@ func TestMWithoutActivePanelDoesNothing(t *testing.T) {
 		process.New("one", "echo one", "", "."),
 	})
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, cmd := model.Update(keyRune('m'))
 	model = next.(Model)
 
 	if cmd != nil {
@@ -609,13 +614,13 @@ func TestMFocusedNormalTogglesMaximize(t *testing.T) {
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ := model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.maximizedPanel != 0 {
 		t.Fatalf("expected panel 0 maximized, got %d", model.maximizedPanel)
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ = model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.maximizedPanel != -1 {
 		t.Fatalf("expected maximize cleared, got %d", model.maximizedPanel)
@@ -640,7 +645,7 @@ func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
 		t.Fatalf("unexpected grid sizes: p0=%dx%d p1=%dx%d", gridCols0, gridRows0, gridCols1, gridRows1)
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ = model.Update(keyRune('m'))
 	model = next.(Model)
 
 	maxCols0, maxRows0 := panels[0].TerminalSize()
@@ -652,7 +657,7 @@ func TestMaximizeResizesOnlyVisiblePanelAndRestoreResizesGrid(t *testing.T) {
 		t.Fatalf("expected hidden panel to keep grid size, got %dx%d", maxCols1, maxRows1)
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ = model.Update(keyRune('m'))
 	model = next.(Model)
 
 	restoreCols0, restoreRows0 := panels[0].TerminalSize()
@@ -871,6 +876,9 @@ func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
 }
 
 func TestGlobalQuitWithHungKillCommandReturnsPromptly(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skipf("skipping PTY-dependent test: %v", err)
+	}
 	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{Shell: "sleep 10"}, ".")
 	if err := panel.Start(); err != nil {
 		t.Fatalf("start panel: %v", err)
@@ -882,7 +890,7 @@ func TestGlobalQuitWithHungKillCommandReturnsPromptly(t *testing.T) {
 	model := NewModel([]*process.Panel{panel})
 	model.activePanel = -1
 
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd := model.Update(keyRune('q'))
 	model = next.(Model)
 	if !model.exiting {
 		t.Fatal("expected exiting state after q")
@@ -908,6 +916,9 @@ func TestGlobalQuitWithHungKillCommandReturnsPromptly(t *testing.T) {
 }
 
 func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skipf("skipping PTY-dependent test: %v", err)
+	}
 	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{Shell: "sleep 10"}, ".")
 	if err := panel.Start(); err != nil {
 		t.Fatalf("start panel: %v", err)
@@ -920,7 +931,7 @@ func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
 	start := time.Now()
 	final, err := runProgramForTest(t, model, 4*time.Second, func(prog *tea.Program) {
 		time.Sleep(50 * time.Millisecond)
-		prog.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+		prog.Send(keyRune('q'))
 	})
 	elapsed := time.Since(start)
 	if err != nil {
@@ -965,7 +976,7 @@ func TestStoppedPanelNormalMTogglesMaximize(t *testing.T) {
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return false }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ := model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.maximizedPanel != 0 {
 		t.Fatalf("expected panel 0 maximized, got %d", model.maximizedPanel)
@@ -977,7 +988,7 @@ func TestUpdateInactiveQQuits(t *testing.T) {
 		process.New("one", "echo one", "", "."),
 	})
 
-	teaModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	teaModel, cmd := model.Update(keyRune('q'))
 	if cmd == nil {
 		t.Fatalf("expected quit command when no panel is active")
 	}
@@ -995,14 +1006,14 @@ func TestDigitWhenUnfocusedFocusesPanel(t *testing.T) {
 	model := NewModel(panels)
 	model.activePanel = -1
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	next, _ := model.Update(keyRune('2'))
 	model = next.(Model)
 	if model.activePanel != 1 {
 		t.Fatalf("digit 2: want panel 1, got %d", model.activePanel)
 	}
 
 	model.activePanel = -1
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	next, _ = model.Update(keyRune('1'))
 	model = next.(Model)
 	if model.activePanel != 0 {
 		t.Fatalf("digit 1: want panel 0, got %d", model.activePanel)
@@ -1015,9 +1026,9 @@ func TestVimGThenQuit(t *testing.T) {
 	})
 	model.activePanel = -1
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	next, _ := model.Update(keyRune('g'))
 	model = next.(Model)
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd := model.Update(keyRune('q'))
 	model = next.(Model)
 	if cmd == nil {
 		t.Fatal("expected quit after g then q")
@@ -1035,22 +1046,22 @@ func TestHjklGridFourPanels(t *testing.T) {
 	model.activePanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	next, _ := model.Update(keyRune('l'))
 	model = next.(Model)
 	if model.activePanel != 1 {
 		t.Fatalf("l from 0: want 1, got %d", model.activePanel)
 	}
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	next, _ = model.Update(keyRune('j'))
 	model = next.(Model)
 	if model.activePanel != 3 {
 		t.Fatalf("j from 1: want 3, got %d", model.activePanel)
 	}
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	next, _ = model.Update(keyRune('k'))
 	model = next.(Model)
 	if model.activePanel != 1 {
 		t.Fatalf("k from 3: want 1, got %d", model.activePanel)
 	}
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next, _ = model.Update(keyRune('h'))
 	model = next.(Model)
 	if model.activePanel != 0 {
 		t.Fatalf("h from 1: want 0, got %d", model.activePanel)
@@ -1067,7 +1078,7 @@ func TestHjklWhenMaximizedKeepsSinglePanelMode(t *testing.T) {
 	model.maximizedPanel = 0
 	model.panelRunning = func(*process.Panel) bool { return true }
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	next, _ := model.Update(keyRune('l'))
 	model = next.(Model)
 	if model.activePanel != 1 {
 		t.Fatalf("l: want panel 1, got %d", model.activePanel)
@@ -1086,7 +1097,7 @@ func TestDigitWhenUnfocusedSelectsPanel(t *testing.T) {
 	model := NewModel(panels)
 	model.activePanel = -1
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	next, _ := model.Update(keyRune('3'))
 	model = next.(Model)
 	if model.activePanel != 2 {
 		t.Fatalf("digit 3 from inactive: want panel 2, got %d", model.activePanel)
@@ -1109,7 +1120,7 @@ func TestInsertModeForwardsHjklDoesNotSwitchPanel(t *testing.T) {
 		return nil
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next, _ := model.Update(keyRune('h'))
 	model = next.(Model)
 	if model.activePanel != 0 {
 		t.Fatalf("insert+h: want stay on panel 0, got %d", model.activePanel)
@@ -1134,7 +1145,7 @@ func TestNormalModeDigitJumpsWithoutForwarding(t *testing.T) {
 		return nil
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	next, _ := model.Update(keyRune('2'))
 	model = next.(Model)
 	if model.activePanel != 1 {
 		t.Fatalf("digit 2: want panel 1, got %d", model.activePanel)
@@ -1243,21 +1254,21 @@ func TestViewStatusLineIncludesMode(t *testing.T) {
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
 	model = next.(Model)
 	view := model.View()
-	if !strings.Contains(view, "MODE: NONE") {
-		t.Fatalf("expected MODE indicator in status line, got view %q", view)
+	if !strings.Contains(view.Content, "MODE: NONE") {
+		t.Fatalf("expected MODE indicator in status line, got view %q", view.Content)
 	}
 
 	model.activePanel = 0
 	model.panelInsertMode = true
 	view = model.View()
-	if !strings.Contains(view, "MODE: INSERT") {
-		t.Fatalf("expected INSERT mode indicator in status line, got view %q", view)
+	if !strings.Contains(view.Content, "MODE: INSERT") {
+		t.Fatalf("expected INSERT mode indicator in status line, got view %q", view.Content)
 	}
 
 	model.panelInsertMode = false
 	view = model.View()
-	if !strings.Contains(view, "active panel: [1] one") {
-		t.Fatalf("expected numbered active panel in status line, got view %q", view)
+	if !strings.Contains(view.Content, "active panel: [1] one") {
+		t.Fatalf("expected numbered active panel in status line, got view %q", view.Content)
 	}
 }
 
@@ -1271,7 +1282,7 @@ func TestZEntersScrollMode(t *testing.T) {
 		return historyLinesOf("a", "b", "c")
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	next, _ := model.Update(keyRune('z'))
 	model = next.(Model)
 
 	if !model.panelScrollMode {
@@ -1294,7 +1305,7 @@ func TestVEntersSelectModeFromNormalAndEscReturnsToNormal(t *testing.T) {
 		return process.DisplayState{Output: "alpha\nbeta"}
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	next, _ := model.Update(keyRune('v'))
 	model = next.(Model)
 	if !model.panelSelectMode {
 		t.Fatal("expected select mode after v")
@@ -1306,7 +1317,7 @@ func TestVEntersSelectModeFromNormalAndEscReturnsToNormal(t *testing.T) {
 		t.Fatalf("expected SELECT mode label, got %q", got)
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 	if model.panelSelectMode {
 		t.Fatal("expected select mode cleared after Esc")
@@ -1328,9 +1339,9 @@ func TestVEntersSelectModeFromScrollAndEscReturnsToScroll(t *testing.T) {
 		return historyLinesOf("a", "b", "c")
 	}
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	next, _ := model.Update(keyRune('z'))
 	model = next.(Model)
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	next, _ = model.Update(keyRune('v'))
 	model = next.(Model)
 	if !model.panelSelectMode {
 		t.Fatal("expected select mode after v from scroll")
@@ -1339,7 +1350,7 @@ func TestVEntersSelectModeFromScrollAndEscReturnsToScroll(t *testing.T) {
 		t.Fatal("expected scroll state retained while selecting history")
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 	if model.panelSelectMode {
 		t.Fatal("expected select mode cleared after Esc")
@@ -1390,17 +1401,11 @@ func TestSelectModeMouseDragUpdatesSelection(t *testing.T) {
 	}
 	model.enterSelectMode()
 
-	next, _ := model.Update(tea.MouseMsg{
-		X: 2, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-	})
+	next, _ := model.Update(mouseLeftClick(2, 2))
 	model = next.(Model)
-	next, _ = model.Update(tea.MouseMsg{
-		X: 4, Y: 3, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseMotion(4, 3, tea.MouseLeft))
 	model = next.(Model)
-	next, _ = model.Update(tea.MouseMsg{
-		X: 4, Y: 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft,
-	})
+	next, _ = model.Update(mouseRelease(4, 3, tea.MouseLeft))
 	model = next.(Model)
 
 	sel := model.selections[0]
@@ -1430,20 +1435,20 @@ func TestScrollModeConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
 	model.ensureScrollState()
 	model.scrollSelections[0] = 9
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	next, _ := model.Update(keySpecial(tea.KeyPgUp))
 	model = next.(Model)
 	if model.scrollOffsets[0] == 0 {
 		t.Fatal("expected pgup to move viewport away from bottom")
 	}
 
 	offsetAfterPgUp := model.scrollOffsets[0]
-	next, _ = model.Update(tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	next, _ = model.Update(mouseWheel(1, 1, tea.MouseWheelDown))
 	model = next.(Model)
 	if model.scrollOffsets[0] >= offsetAfterPgUp {
 		t.Fatalf("expected wheel down to move viewport toward live bottom, got %d -> %d", offsetAfterPgUp, model.scrollOffsets[0])
 	}
 
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	next, _ = model.Update(keySpecial(tea.KeyPgDown))
 	model = next.(Model)
 	if model.scrollOffsets[0] != 0 {
 		t.Fatalf("expected pgdown to return to live bottom, got offset %d", model.scrollOffsets[0])
@@ -1467,7 +1472,7 @@ func TestScrollModeSelectionAndMarkPersistAcrossAppend(t *testing.T) {
 	model.ensureScrollState()
 	model.scrollSelections[0] = 6
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ := model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.scrollMarks[0] != 7 {
 		t.Fatalf("expected mark at selected line, got %d", model.scrollMarks[0])
@@ -1500,7 +1505,7 @@ func TestScrollModeMarkedLineScrollsOffButCanBeFoundAgain(t *testing.T) {
 	model.ensureScrollState()
 	model.scrollSelections[0] = 8
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ := model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.scrollMarks[0] != 9 {
 		t.Fatalf("expected mark stored at line 8, got %d", model.scrollMarks[0])
@@ -1547,7 +1552,7 @@ func TestScrollModeRetainsMarkWhenLineTemporarilyMissing(t *testing.T) {
 	model.ensureScrollState()
 	model.scrollSelections[0] = 1
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ := model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.scrollMarks[0] != 2 {
 		t.Fatalf("expected initial mark, got %d", model.scrollMarks[0])
@@ -1596,7 +1601,7 @@ func TestScrollModeMarkStaysOnOriginalDuplicateLine(t *testing.T) {
 	model.ensureScrollState()
 	model.scrollSelections[0] = 2
 
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next, _ := model.Update(keyRune('m'))
 	model = next.(Model)
 	if model.scrollMarks[0] != 3 {
 		t.Fatalf("expected mark stored for the first duplicate line, got %d", model.scrollMarks[0])
@@ -1635,7 +1640,7 @@ func TestXShortcutKillsPanel(t *testing.T) {
 	model.panelRunning = func(p *process.Panel) bool { return true }
 
 	// Press 'x'
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd := model.Update(keyRune('x'))
 	model = next.(Model)
 
 	if !model.killingPanel {

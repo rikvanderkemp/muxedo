@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/rikvanderkemp/muxedo/internal/profile"
 	"github.com/rikvanderkemp/muxedo/internal/ui"
@@ -17,7 +17,7 @@ import (
 func typeKeys(t *testing.T, m tea.Model, s string) tea.Model {
 	t.Helper()
 	for _, r := range s {
-		m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = sendKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	return m
 }
@@ -30,12 +30,12 @@ func sendKey(t *testing.T, m tea.Model, key tea.KeyMsg) tea.Model {
 
 func pressEnter(t *testing.T, m tea.Model) tea.Model {
 	t.Helper()
-	return sendKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	return sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 }
 
 func pressEsc(t *testing.T, m tea.Model) tea.Model {
 	t.Helper()
-	return sendKey(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	return sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 }
 
 func TestWizardHappyPathWritesLoadableProfile(t *testing.T) {
@@ -56,7 +56,7 @@ func TestWizardHappyPathWritesLoadableProfile(t *testing.T) {
 
 	m = pressEnter(t, m)
 
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	m = typeKeys(t, m, "Dev Server")
 	m = pressEnter(t, m)
@@ -66,7 +66,7 @@ func TestWizardHappyPathWritesLoadableProfile(t *testing.T) {
 	m = typeKeys(t, m, "npm run dev -f --arguments=2123")
 	m = pressEnter(t, m)
 
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	m = pressEnter(t, m)
 
@@ -156,7 +156,7 @@ func TestWizardSmallBehaviors(t *testing.T) {
 			drive: func(t *testing.T, m tea.Model) tea.Model {
 				m = pressEnter(t, m)
 				m = typeKeys(t, m, "Half way")
-				return sendKey(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+				return sendKey(t, m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 			},
 			assert: func(t *testing.T, w Model) {
 				if !w.aborted {
@@ -198,7 +198,7 @@ func TestWizardSmallBehaviors(t *testing.T) {
 				m = typeKeys(t, m, "ls")
 				m = pressEnter(t, m)
 
-				m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				m = sendKey(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
 
 				m = typeKeys(t, m, "dev")
 				return pressEnter(t, m)
@@ -222,12 +222,12 @@ func TestWizardSmallBehaviors(t *testing.T) {
 				m = typeKeys(t, m, "sleep 1")
 				m = pressEnter(t, m)
 
-				m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+				m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 				w := m.(Model)
 				if w.modeChoice != profile.StartupModeSync {
 					t.Fatalf("mode = %q after tab, want sync", w.modeChoice)
 				}
-				return sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+				return sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 			},
 			assert: func(t *testing.T, w Model) {
 				if w.modeChoice != profile.StartupModeAsync {
@@ -246,7 +246,7 @@ func TestWizardSmallBehaviors(t *testing.T) {
 				if w.step != stepWorkingDir {
 					t.Fatalf("setup: step = %v, want stepWorkingDir", w.step)
 				}
-				return sendKey(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+				return sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
 			},
 			assert: func(t *testing.T, w Model) {
 				if w.step != stepTitle {
@@ -300,7 +300,7 @@ func TestWizardPanelWorkingDirOverride(t *testing.T) {
 	m = typeKeys(t, m, "ls")
 	m = pressEnter(t, m)
 
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
 
 	m = typeKeys(t, m, "custom")
 	m = pressEnter(t, m)
@@ -309,7 +309,7 @@ func TestWizardPanelWorkingDirOverride(t *testing.T) {
 	m = typeKeys(t, m, "ls")
 	m = pressEnter(t, m)
 
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	m = pressEnter(t, m)
 
@@ -375,7 +375,7 @@ func TestWizardRefusesToOverwriteExistingProfile(t *testing.T) {
 	m = typeKeys(t, m, "ls")
 	m = pressEnter(t, m)
 
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	m = pressEnter(t, m) // save path (default)
 	m = pressEnter(t, m) // confirm (should fail due to existing)
@@ -413,7 +413,7 @@ func TestWizardWorkingDirTabCompletesSingleMatch(t *testing.T) {
 	m = pressEnter(t, m) // accept random title -> working dir
 
 	m = typeKeys(t, m, "a")
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	w := m.(Model)
 	if w.step != stepWorkingDir {
@@ -440,7 +440,7 @@ func TestWizardWorkingDirTabExtendsToLongestCommonPrefix(t *testing.T) {
 	m = pressEnter(t, m)
 
 	m = typeKeys(t, m, "a")
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	w := m.(Model)
 	if got := w.input.Value(); got != "ap" {
@@ -467,8 +467,8 @@ func TestWizardWorkingDirSecondTabOpensPicker(t *testing.T) {
 	m = pressEnter(t, m)
 
 	m = typeKeys(t, m, "a")
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	w := m.(Model)
 	if !w.dirPickOpen {
@@ -495,10 +495,10 @@ func TestWizardWorkingDirPickerDownArrowAndTabAccepts(t *testing.T) {
 	m = pressEnter(t, m)
 
 	m = typeKeys(t, m, "a")
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyDown})
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	w := m.(Model)
 	if w.dirPickOpen {
@@ -525,8 +525,8 @@ func TestWizardWorkingDirPickerClosesOnTyping(t *testing.T) {
 	m = pressEnter(t, m)
 
 	m = typeKeys(t, m, "a")
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 	w := m.(Model)
 	if !w.dirPickOpen {
 		t.Fatalf("setup: picker not open")
@@ -549,7 +549,7 @@ func TestWizardWorkingDirTabWithNoMatchSetsError(t *testing.T) {
 	m = pressEnter(t, m)
 
 	m = typeKeys(t, m, "nope")
-	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	w := m.(Model)
 	if !strings.Contains(w.errMsg, "no matching directory") {
