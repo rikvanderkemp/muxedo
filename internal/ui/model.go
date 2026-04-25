@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -44,7 +45,6 @@ type startupItem struct {
 	Label       string
 	Mode        profile.StartupMode
 	Status      startupStatus
-	Spinner     int
 	ExitCode    int
 	HasExitCode bool
 	ErrorText   string
@@ -137,6 +137,7 @@ type Model struct {
 	startupCompleted bool
 	startupSpecs     []profile.StartupSpec
 	startupItems     []startupItem
+	startupSpinner   spinner.Model
 	panelSpecs       []profile.PanelSpec
 	scrollbackConfig profile.ScrollbackConfig
 	msgChan          chan tea.Msg
@@ -177,10 +178,14 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 }
 
 func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
+	s := spinner.New(spinner.WithSpinner(spinner.Dot))
+	s.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
+
 	return Model{
 		title:            title,
 		startupSpecs:     startup,
 		startupItems:     newStartupItems(startup),
+		startupSpinner:   s,
 		panelSpecs:       panels,
 		scrollbackConfig: sb,
 		theme:            theme,
@@ -229,7 +234,7 @@ func (m Model) Init() tea.Cmd {
 	if m.startupCompleted {
 		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
 	}
-	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle))
+	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, tea.SetWindowTitle(windowTitle), m.startupSpinner.Tick)
 }
 
 func (m Model) startupSequence() tea.Msg {
@@ -399,9 +404,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.HasExitCode = msg.hasExitCode
 			item.ExitCode = msg.exitCode
 			item.ErrorText = msg.errText
-			if msg.status != startupStatusRunning {
-				item.Spinner = 0
-			}
 			m.startupItems[msg.idx] = item
 		}
 		return m, m.waitForMsg
@@ -411,6 +413,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showBuffer = false
 		m.resizePanels()
 		return m, m.waitForMsg
+	case spinner.TickMsg:
+		if m.startupCompleted {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.startupSpinner, cmd = m.startupSpinner.Update(msg)
+		return m, cmd
 	}
 
 	if m.killingPanel {
@@ -670,11 +679,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case tickMsg:
-		for i := range m.startupItems {
-			if m.startupItems[i].Status == startupStatusRunning {
-				m.startupItems[i].Spinner = (m.startupItems[i].Spinner + 1) % len(startupSpinnerFrames)
-			}
-		}
 		n := len(m.panels)
 		if len(m.prevPanelRunning) != n {
 			m.prevPanelRunning = make([]bool, n)
@@ -1012,8 +1016,6 @@ func resizeIntSlice(prev []int, n int, fill int) []int {
 	return out
 }
 
-var startupSpinnerFrames = []string{"-", "\\", "|", "/"}
-
 func (m Model) formatStartupLog(idx int, line string) string {
 	if idx < 0 || idx >= len(m.startupItems) {
 		return line
@@ -1061,29 +1063,43 @@ func (m Model) renderStartupStatusLines() []string {
 	}
 	lines := make([]string, 0, len(m.startupItems)+1)
 	lines = append(lines, "Startup status:")
+	runningSpinner := m.startupSpinner.View()
 	for _, item := range m.startupItems {
-		lines = append(lines, formatStartupStatusLine(item))
+		lines = append(lines, formatStartupStatusLine(m.theme, item, runningSpinner))
 	}
 	return lines
 }
 
-func formatStartupStatusLine(item startupItem) string {
-	prefix := fmt.Sprintf("Starting %s [%s]", item.Label, item.Mode)
+func formatStartupStatusLine(theme Theme, item startupItem, runningSpinner string) string {
+	okIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true).Render("✓")
+	errIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("✗")
+	pendingIcon := lipgloss.NewStyle().Foreground(theme.color(theme.StatusHintFG)).Render("…")
+
+	base := fmt.Sprintf("%s [%s]", item.Label, item.Mode)
 	switch item.Status {
 	case startupStatusOK:
-		return fmt.Sprintf("%s -> OK (%d)", prefix, item.ExitCode)
-	case startupStatusError:
 		if item.HasExitCode {
-			return fmt.Sprintf("%s -> ERROR (%d)", prefix, item.ExitCode)
+			return fmt.Sprintf("%s %s %d", okIcon, base, item.ExitCode)
+		}
+		return fmt.Sprintf("%s %s", okIcon, base)
+	case startupStatusError:
+		if item.HasExitCode && item.ErrorText != "" {
+			return fmt.Sprintf("%s %s %d · %s", errIcon, base, item.ExitCode, item.ErrorText)
+		}
+		if item.HasExitCode {
+			return fmt.Sprintf("%s %s %d", errIcon, base, item.ExitCode)
 		}
 		if item.ErrorText != "" {
-			return fmt.Sprintf("%s -> ERROR (%s)", prefix, item.ErrorText)
+			return fmt.Sprintf("%s %s · %s", errIcon, base, item.ErrorText)
 		}
-		return prefix + " -> ERROR"
+		return fmt.Sprintf("%s %s", errIcon, base)
 	case startupStatusRunning:
-		return fmt.Sprintf("%s -> %s", prefix, startupSpinnerFrames[item.Spinner%len(startupSpinnerFrames)])
+		if runningSpinner == "" {
+			runningSpinner = "…"
+		}
+		return fmt.Sprintf("%s %s", runningSpinner, base)
 	default:
-		return prefix + " -> queued"
+		return fmt.Sprintf("%s %s queued", pendingIcon, base)
 	}
 }
 

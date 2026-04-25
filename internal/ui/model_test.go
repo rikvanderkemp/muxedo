@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
@@ -696,7 +697,7 @@ func TestStartupBufferShowsStatusRowsAndLogs(t *testing.T) {
 	if !strings.Contains(view, "Startup status:") {
 		t.Fatalf("renderMessageBuffer() missing startup header: %q", view)
 	}
-	if !strings.Contains(view, "Starting echo one [async] ->") {
+	if !strings.Contains(view, "echo one [async]") {
 		t.Fatalf("renderMessageBuffer() missing startup status row: %q", view)
 	}
 	if !strings.Contains(view, "[echo one] warming up") {
@@ -714,11 +715,11 @@ func TestStartupTickAdvancesSpinner(t *testing.T) {
 
 	next, _ := model.Update(startupStatusMsg{idx: 0, status: startupStatusRunning})
 	model = next.(Model)
-	frame := model.startupItems[0].Spinner
+	frame := model.startupSpinner.View()
 
-	next, _ = model.Update(tickMsg{})
+	next, _ = model.Update(spinner.TickMsg{})
 	model = next.(Model)
-	if model.startupItems[0].Spinner == frame {
+	if model.startupSpinner.View() == frame {
 		t.Fatal("expected startup spinner to advance on tick")
 	}
 }
@@ -945,14 +946,14 @@ func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
 }
 
 func TestFormatStartupStatusLineShowsExitCode(t *testing.T) {
-	got := formatStartupStatusLine(startupItem{
+	got := formatStartupStatusLine(DefaultTheme(), startupItem{
 		Label:       "echo one",
 		Mode:        profile.StartupModeSync,
 		Status:      startupStatusError,
 		ExitCode:    23,
 		HasExitCode: true,
-	})
-	if !strings.Contains(got, "ERROR (23)") {
+	}, "…")
+	if !strings.Contains(got, "23") {
 		t.Fatalf("formatStartupStatusLine() = %q, want error exit code", got)
 	}
 }
