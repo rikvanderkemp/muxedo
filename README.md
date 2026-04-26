@@ -129,8 +129,9 @@ The shortest path to using muxedo:
 - Press `Esc` once to return to normal mode, then `Esc` again to unfocus the panel.
 - Press `h` `j` `k` `l` in normal mode to move between panels.
 - Press `1` to `9` in normal mode to jump to the first nine panels.
-- Press `z` in a focused panel to inspect scrollback.
-- Press `v` in a focused panel to select and copy text.
+- Use the mouse wheel or `PgUp`/`PgDn` in a focused panel to inspect scrollback.
+- Press `G` or `Esc` while scrolled back to return to the live bottom.
+- Drag inside a focused panel to select text, then press `y` or `Enter` in normal mode to copy it.
 - Press `r` in normal mode to restart the focused panel.
 - Press `x` in normal mode to stop the focused panel and run its optional kill command.
 - Press `m` in normal mode to maximize or restore the focused panel.
@@ -141,9 +142,9 @@ The shortest path to using muxedo:
 
 Muxedo captures each panel's output to a scrollback file for the current run. Scrollback starts empty on launch, grows while the panel runs, and is cleared when that panel is restarted with `R`.
 
-Scrollback mode is best-effort for full-screen TUIs and works best with shells, logs, and line-oriented output.
+Scrollback is best-effort for full-screen TUIs and works best with shells, logs, and line-oriented output.
 
-Select mode copies text to the system clipboard when one of these tools is available: `pbcopy`, `wl-copy`, `xclip`, or `xsel`. If none are available, muxedo falls back to OSC52 terminal clipboard copy when supported.
+Panel selection copies text to the system clipboard when one of these tools is available: `pbcopy`, `wl-copy`, `xclip`, or `xsel`. If none are available, muxedo falls back to OSC52 terminal clipboard copy when supported.
 
 Optional scrollback settings:
 

@@ -69,14 +69,13 @@ type exitProgressMsg struct {
 }
 
 type panelSelection struct {
-	Active         bool
-	Dragging       bool
-	Source         selectSource
-	ReturnToScroll bool
-	StartRow       int
-	StartCol       int
-	EndRow         int
-	EndCol         int
+	Active   bool
+	Dragging bool
+	Source   selectSource
+	StartRow int
+	StartCol int
+	EndRow   int
+	EndCol   int
 }
 
 const maxStartupLogLineBytes = 1 << 20 // 1 MiB
@@ -109,9 +108,7 @@ type Model struct {
 	grid             layout.Grid
 	activePanel      int
 	maximizedPanel   int
-	panelInsertMode  bool // when a panel is focused: false = normal (vim-like), true = keys go to PTY
-	panelScrollMode  bool
-	panelSelectMode  bool
+	panelInsertMode  bool   // when a panel is focused: false = normal (vim-like), true = keys go to PTY
 	prevPanelRunning []bool // per-panel running state last tick; detects run→stop while focused
 	scrollOffsets    []int
 	scrollSelections []int
@@ -458,24 +455,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.String() == "esc" {
 			if m.activePanel >= 0 {
-				if m.panelSelectMode {
-					m.exitSelectMode()
-					return m, nil
-				}
-				if m.panelScrollMode {
-					m.panelScrollMode = false
-					return m, nil
-				}
 				if m.panelInsertMode {
 					m.panelInsertMode = false
+					return m, nil
+				}
+				if m.activePanelScrolledBack() {
+					m.scrollActivePanelToLive()
+					return m, nil
+				}
+				if m.clearActiveSelection() {
 					return m, nil
 				}
 				m.maximizedPanel = -1
 				m.activePanel = -1
 				m.panelInsertMode = false
-				m.panelScrollMode = false
-				m.panelSelectMode = false
-				m.clearActiveSelection()
 				m.resizePanels()
 				return m, nil
 			}
@@ -494,90 +487,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activePanel >= 0 && m.activePanel < len(m.panels) {
 			m.ensureScrollState()
 			p := m.panels[m.activePanel]
-
-			if !m.panelInsertMode && !m.panelScrollMode && !m.panelSelectMode && msg.Mod == 0 {
-				if runes := []rune(msg.Text); len(runes) == 1 {
-					r := runes[0]
-					if next, ok := neighborPanelIndex(m.grid, len(m.panels), m.activePanel, r); ok {
-						m.applyPanelFocus(next)
-						return m, nil
-					}
-					if idx, ok := panelIndexFromDigit(r, len(m.panels)); ok {
-						m.applyPanelFocus(idx)
-						return m, nil
-					}
-				}
-			}
-
 			running := m.panelRunning(p)
-			if !running {
-				if m.panelInsertMode {
-					if msg.String() == "ctrl+c" {
-						return m, nil
-					}
-					return m, nil
-				}
-				if m.panelSelectMode {
-					if m.handleSelectKey(msg) {
-						return m, nil
-					}
-					return m, nil
-				}
-				if m.panelScrollMode {
-					m.handleScrollKey(msg)
-					return m, nil
-				}
-				if msg.Text == "r" || msg.Text == "R" {
-					if err := m.restartPanel(p); err != nil {
-						m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: reloading panel %s: %v", p.Name, err))
-					}
-					m.resizePanels()
-					return m, nil
-				}
-				if msg.Mod == 0 {
-					if runes := []rune(msg.Text); len(runes) == 1 {
-						switch runes[0] {
-						case 'i', 'I':
-							m.panelInsertMode = true
-						case 'm', 'M':
-							m.toggleMaximized()
-						case 'z', 'Z':
-							m.enterScrollMode()
-						case 'v', 'V':
-							m.enterSelectMode()
-						case 'x', 'X':
-							m.killingPanel = true
-							m.killingPanelIdx = m.activePanel
-							m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
-							return m, killPanelCmd(m.activePanel, p)
-						}
-					}
-				}
-				return m, nil
-			}
-
-			if m.panelScrollMode {
-				if msg.Mod == 0 {
-					if runes := []rune(msg.Text); len(runes) == 1 {
-						switch runes[0] {
-						case 'v', 'V':
-							m.enterSelectMode()
-							return m, nil
-						}
-					}
-				}
-				m.handleScrollKey(msg)
-				return m, nil
-			}
-
-			if m.panelSelectMode {
-				if m.handleSelectKey(msg) {
-					return m, nil
-				}
-				return m, nil
-			}
 
 			if m.panelInsertMode {
+				if !running {
+					return m, nil
+				}
 				if msg.String() == "ctrl+c" {
 					return m, nil
 				}
@@ -591,18 +506,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if msg.Mod == 0 {
 				if runes := []rune(msg.Text); len(runes) == 1 {
+					r := runes[0]
+					if next, ok := neighborPanelIndex(m.grid, len(m.panels), m.activePanel, r); ok {
+						m.applyPanelFocus(next)
+						return m, nil
+					}
+					if idx, ok := panelIndexFromDigit(r, len(m.panels)); ok {
+						m.applyPanelFocus(idx)
+						return m, nil
+					}
+				}
+			}
+
+			if m.handleCopyKey(msg) {
+				return m, nil
+			}
+			if m.handleScrollKey(msg) {
+				return m, nil
+			}
+
+			if msg.Mod == 0 {
+				if runes := []rune(msg.Text); len(runes) == 1 {
 					switch runes[0] {
 					case 'i', 'I':
-						m.panelInsertMode = true
+						if running {
+							m.clearActiveSelection()
+							m.panelInsertMode = true
+						}
 						return m, nil
 					case 'm', 'M':
 						m.toggleMaximized()
-						return m, nil
-					case 'z', 'Z':
-						m.enterScrollMode()
-						return m, nil
-					case 'v', 'V':
-						m.enterSelectMode()
 						return m, nil
 					case 'r', 'R':
 						if err := m.restartPanel(p); err != nil {
@@ -617,6 +550,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, killPanelCmd(m.activePanel, p)
 					}
 				}
+			}
+			if !running {
+				return m, nil
 			}
 			return m, nil
 		}
@@ -642,21 +578,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
 		if msg.Button == tea.MouseLeft {
-			if m.panelSelectMode && m.activePanel >= 0 {
-				if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
+			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok {
+				m.clearAllSelections()
+				if idx != m.activePanel {
+					m.applyPanelFocus(idx)
+				}
+				if m.panelInsertMode {
+					m.applyPanelFocus(idx)
+					return m, nil
+				}
+				if m.activePanel >= 0 {
 					if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
-						m.startSelection(row, col)
+						m.beginSelection(row, col)
 						return m, nil
 					}
 				}
-			}
-			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok {
-				m.applyPanelFocus(idx)
 				return m, nil
 			}
 		}
 	case tea.MouseMotionMsg:
-		if m.panelSelectMode && m.activePanel >= 0 && msg.Button == tea.MouseLeft {
+		if m.activePanel >= 0 && !m.panelInsertMode && msg.Button == tea.MouseLeft {
 			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
 				if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
 					m.updateSelection(row, col)
@@ -665,7 +606,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseReleaseMsg:
-		if m.panelSelectMode && m.activePanel >= 0 && msg.Button == tea.MouseLeft {
+		if m.activePanel >= 0 && !m.panelInsertMode && msg.Button == tea.MouseLeft {
 			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
 				if row, col, ok := m.panelContentPoint(idx, msg.X, msg.Y); ok {
 					m.finishSelection(row, col)
@@ -674,7 +615,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseWheelMsg:
-		if m.activePanel >= 0 && m.panelScrollMode {
+		if m.activePanel >= 0 {
 			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
 				switch msg.Button {
 				case tea.MouseWheelUp:
@@ -711,9 +652,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.maximizedPanel = -1
 						m.activePanel = -1
 						m.panelInsertMode = false
-						m.panelScrollMode = false
-						m.panelSelectMode = false
-						m.clearActiveSelection()
 						m.resizePanels()
 					}
 				}
@@ -798,8 +736,6 @@ func (m Model) View() tea.View {
 			idx == m.activePanel,
 			stopped,
 			m.panelInsertMode,
-			m.panelScrollMode,
-			m.panelSelectMode,
 			m.viewportForPanel(idx, gh),
 			formatElapsed(p.Elapsed()),
 		)
@@ -840,8 +776,6 @@ func (m Model) View() tea.View {
 					idx == m.activePanel,
 					stopped,
 					m.panelInsertMode,
-					m.panelScrollMode && idx == m.activePanel,
-					m.panelSelectMode && idx == m.activePanel,
 					m.viewportForPanel(idx, cell.Height),
 					formatElapsed(p.Elapsed()),
 				)
@@ -906,12 +840,6 @@ func (m Model) statusModeLabel() string {
 	if m.panelInsertMode {
 		return "INSERT"
 	}
-	if m.panelSelectMode {
-		return "SELECT"
-	}
-	if m.panelScrollMode {
-		return "SCROLL"
-	}
 	return "NORMAL"
 }
 
@@ -924,7 +852,7 @@ func (m Model) statusHint() string {
 	}
 
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return "No active: 1–9 focus · NORMAL: hjkl panes · Ctrl-B buffer · Ctrl-C quit"
+		return "No active: click/1–9 focus · Ctrl-B buffer · Ctrl-C quit"
 	}
 
 	p := m.panels[m.activePanel]
@@ -935,24 +863,17 @@ func (m Model) statusHint() string {
 		maximizeAction = "M restore"
 		escapeAction = "Esc restore+blur"
 	}
+	scrollAction := "PgUp/PgDn wheel scroll"
+	if m.activePanelScrolledBack() {
+		scrollAction = "PgDn/G live"
+		escapeAction = "Esc live"
+	}
 	if !m.panelRunning(p) {
-		if m.panelInsertMode {
-			parts = append(parts, "STOPPED-INSERT: Esc normal")
-		} else if m.panelSelectMode {
-			parts = append(parts, "SELECT: drag mouse", "Y/Enter copy", "Esc back")
-		} else if m.panelScrollMode {
-			parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "Esc normal")
-		} else {
-			parts = append(parts, "STOPPED-NORMAL: I insert", "Z scroll", "V select", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
-		}
+		parts = append(parts, "STOPPED-NORMAL: "+scrollAction, "drag select", "Y/Enter copy", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
 	} else if m.panelInsertMode {
 		parts = append(parts, "INSERT: Esc normal")
-	} else if m.panelSelectMode {
-		parts = append(parts, "SELECT: drag mouse", "Y/Enter copy", "Esc back")
-	} else if m.panelScrollMode {
-		parts = append(parts, "SCROLL: PgUp/PgDn wheel", "J/K move", "M mark", "V select", "G live", "Esc normal")
 	} else {
-		parts = append(parts, "NORMAL: I insert", "Z scroll", "V select", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", "Ctrl-B buffer", escapeAction)
+		parts = append(parts, "NORMAL: I insert", scrollAction, "drag select", "Y/Enter copy", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", "Ctrl-B buffer", escapeAction)
 	}
 
 	parts = append(parts, "README")
@@ -1168,72 +1089,70 @@ func resizeSelectionSlice(prev []panelSelection, n int) []panelSelection {
 	return out
 }
 
-func (m *Model) enterScrollMode() {
+func (m *Model) activePanelScrolledBack() bool {
+	return m.panelScrolledBack(m.activePanel)
+}
+
+func (m *Model) panelScrolledBack(idx int) bool {
+	return idx >= 0 && idx < len(m.scrollOffsets) && m.scrollOffsets[idx] > 0
+}
+
+func (m *Model) scrollActivePanelToLive() {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
 		return
 	}
 	m.ensureScrollState()
-	m.panelInsertMode = false
-	m.panelScrollMode = true
-
 	idx := m.activePanel
+	m.scrollOffsets[idx] = 0
 	lines := m.historyLines(m.panels[idx])
-	total := len(lines)
-	if total == 0 {
-		m.scrollOffsets[idx] = 0
-		m.scrollSelections[idx] = -1
-		return
-	}
-
 	m.reconcileScrollState(idx, lines)
-	if m.scrollSelections[idx] < 0 || m.scrollSelections[idx] >= total {
-		m.scrollSelections[idx] = total - 1
+	if len(lines) == 0 {
+		m.scrollSelections[idx] = -1
+	} else {
+		m.scrollSelections[idx] = len(lines) - 1
+	}
+	if idx < len(m.selections) && m.selections[idx].Source == selectSourceHistory {
+		m.selections[idx] = panelSelection{}
 	}
 }
 
-func (m *Model) enterSelectMode() {
+func (m *Model) hasActiveSelection() bool {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
+		return false
 	}
 	m.ensureScrollState()
-	idx := m.activePanel
-	sel := panelSelection{
-		Source:         selectSourceLive,
-		ReturnToScroll: m.panelScrollMode,
-		StartRow:       0,
-		StartCol:       0,
-		EndRow:         0,
-		EndCol:         0,
-	}
-	if m.panelScrollMode {
-		sel.Source = selectSourceHistory
-	}
-	m.selections[idx] = sel
-	m.panelInsertMode = false
-	m.panelSelectMode = true
+	return m.selections[m.activePanel].Active
 }
 
-func (m *Model) exitSelectMode() {
+func (m *Model) clearActiveSelection() bool {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		m.panelSelectMode = false
-		return
-	}
-	idx := m.activePanel
-	returnToScroll := m.selections[idx].ReturnToScroll
-	m.selections[idx] = panelSelection{}
-	m.panelSelectMode = false
-	m.panelScrollMode = returnToScroll
-}
-
-func (m *Model) clearActiveSelection() {
-	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
+		return false
 	}
 	m.ensureScrollState()
+	sel := m.selections[m.activePanel]
+	if !sel.Active && !sel.Dragging {
+		return false
+	}
 	m.selections[m.activePanel] = panelSelection{}
+	return true
 }
 
-func (m *Model) handleSelectKey(msg tea.KeyPressMsg) bool {
+func (m *Model) clearAllSelections() bool {
+	m.ensureScrollState()
+	cleared := false
+	for i, sel := range m.selections {
+		if sel.Active || sel.Dragging {
+			m.selections[i] = panelSelection{}
+			cleared = true
+		}
+	}
+	return cleared
+}
+
+func (m *Model) handleCopyKey(msg tea.KeyPressMsg) bool {
+	if !m.hasActiveSelection() {
+		return false
+	}
 	if msg.String() == "enter" {
 		m.copyCurrentSelection()
 		return true
@@ -1250,13 +1169,37 @@ func (m *Model) handleSelectKey(msg tea.KeyPressMsg) bool {
 	return false
 }
 
+func (m *Model) beginSelection(row, col int) {
+	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
+		return
+	}
+	m.ensureScrollState()
+	idx := m.activePanel
+	source := selectSourceLive
+	if m.panelScrolledBack(idx) {
+		source = selectSourceHistory
+	}
+	m.selections[idx] = panelSelection{
+		Dragging: true,
+		Source:   source,
+		StartRow: row,
+		StartCol: col,
+		EndRow:   row,
+		EndCol:   col,
+	}
+}
+
 func (m *Model) startSelection(row, col int) {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
 		return
 	}
 	m.ensureScrollState()
 	idx := m.activePanel
-	sel := m.selections[idx]
+	source := selectSourceLive
+	if m.panelScrolledBack(idx) {
+		source = selectSourceHistory
+	}
+	sel := panelSelection{Source: source}
 	sel.Active = true
 	sel.Dragging = true
 	sel.StartRow = row
@@ -1270,6 +1213,7 @@ func (m *Model) updateSelection(row, col int) {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
 		return
 	}
+	m.ensureScrollState()
 	idx := m.activePanel
 	sel := m.selections[idx]
 	if !sel.Dragging {
@@ -1285,9 +1229,14 @@ func (m *Model) finishSelection(row, col int) {
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
 		return
 	}
+	m.ensureScrollState()
 	idx := m.activePanel
 	sel := m.selections[idx]
 	if !sel.Dragging {
+		return
+	}
+	if !sel.Active {
+		m.selections[idx] = panelSelection{}
 		return
 	}
 	sel.Active = true
@@ -1297,34 +1246,28 @@ func (m *Model) finishSelection(row, col int) {
 	m.selections[idx] = sel
 }
 
-func (m *Model) handleScrollKey(msg tea.KeyPressMsg) {
+func (m *Model) handleScrollKey(msg tea.KeyPressMsg) bool {
 	switch msg.String() {
 	case "pgup":
 		m.scrollViewportBy(-m.activePaneLineCapacity())
+		return true
 	case "pgdown":
 		m.scrollViewportBy(m.activePaneLineCapacity())
-	case "up":
-		m.moveSelectionBy(-1)
-	case "down":
-		m.moveSelectionBy(1)
+		return true
 	}
 
 	if msg.Mod == 0 {
 		if runes := []rune(msg.Text); len(runes) == 1 {
 			switch runes[0] {
-			case 'j':
-				m.moveSelectionBy(1)
-			case 'k':
-				m.moveSelectionBy(-1)
-			case 'g':
-				m.jumpSelectionTo(0)
 			case 'G':
-				m.jumpSelectionTo(-1)
-			case 'm':
-				m.toggleMark()
+				if m.activePanelScrolledBack() {
+					m.scrollActivePanelToLive()
+					return true
+				}
 			}
 		}
 	}
+	return false
 }
 
 func (m *Model) scrollViewportBy(delta int) {
@@ -1467,13 +1410,13 @@ func (m *Model) viewportForPanel(idx, height int) *paneViewport {
 
 	m.ensureScrollState()
 	pageSize := max(1, paneLineCapacity(height))
-	if m.panelSelectMode {
+	if idx < len(m.selections) && m.selections[idx].Active {
 		return m.selectViewportForPanel(idx, pageSize)
 	}
-	if !m.panelScrollMode {
-		return nil
+	if m.panelScrolledBack(idx) {
+		return m.historyViewportForPanel(idx, pageSize)
 	}
-	return m.historyViewportForPanel(idx, pageSize)
+	return nil
 }
 
 func (m *Model) historyViewportForPanel(idx, pageSize int) *paneViewport {
@@ -1681,7 +1624,11 @@ func (m *Model) currentSelectionText() string {
 		if row == endRow {
 			lineEnd = endCol + 1
 		}
-		selected = append(selected, strings.TrimRight(sliceByCells(lines[row], lineStart, lineEnd), " "))
+		fragment := strings.TrimRight(sliceByCells(lines[row], lineStart, lineEnd), " ")
+		if strings.TrimSpace(fragment) == "" {
+			continue
+		}
+		selected = append(selected, fragment)
 	}
 	return strings.Join(selected, "\n")
 }
@@ -1734,12 +1681,6 @@ func (m Model) renderStatusLine() string {
 	case "INSERT":
 		modeFG = m.theme.color(m.theme.StatusModeInsertFG)
 		modeBG = m.theme.color(m.theme.StatusModeInsertBG)
-	case "SELECT":
-		modeFG = m.theme.color(m.theme.StatusModeNormalFG)
-		modeBG = m.theme.color(m.theme.StatusModeNormalBG)
-	case "SCROLL":
-		modeFG = m.theme.color(m.theme.StatusModeNormalFG)
-		modeBG = m.theme.color(m.theme.StatusModeNormalBG)
 	}
 	segments := []statusSegment{
 		{Text: time.Now().Format("15:04:05"), FG: m.theme.color(m.theme.StatusTimeFG), BG: m.theme.color(m.theme.StatusTimeBG)},

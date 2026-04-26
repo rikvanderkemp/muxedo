@@ -12,6 +12,7 @@
 package process
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,27 @@ func BenchmarkScrollbackWriterHistory(b *testing.B) {
 
 	for b.Loop() {
 		_ = sw.History(append([]string(nil), screen...))
+	}
+}
+
+func BenchmarkPanelHistoryWithLargeScrollback(b *testing.B) {
+	p := NewWithScrollback("bench", "true", "", ".", b.TempDir(), 1<<30)
+	p.termMu.Lock()
+	_, _ = p.term.Write([]byte(strings.Repeat("screen line\r\n", 24)))
+	p.termMu.Unlock()
+
+	p.sb.mu.Lock()
+	p.sb.lines = make([]HistoryLine, 5000)
+	for i := range p.sb.lines {
+		p.sb.lines[i] = HistoryLine{ID: uint64(i + 1), Text: "line " + strconv.Itoa(i)}
+	}
+	p.sb.loaded = true
+	p.sb.nextID = uint64(len(p.sb.lines))
+	p.sb.mu.Unlock()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = p.History()
 	}
 }
 

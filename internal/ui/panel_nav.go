@@ -76,9 +76,6 @@ func (m *Model) applyPanelFocus(next int) {
 	}
 	m.activePanel = next
 	m.panelInsertMode = false
-	m.panelScrollMode = false
-	m.panelSelectMode = false
-	m.clearActiveSelection()
 	if m.maximizedPanel >= 0 {
 		m.maximizedPanel = next
 		m.resizePanels()

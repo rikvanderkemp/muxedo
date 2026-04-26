@@ -102,7 +102,7 @@ func TestRenderPaneFooterTruncatesTimerToWidth(t *testing.T) {
 }
 
 func TestRenderPaneShortBodyKeepsOutputVisible(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello world"}, 20, 4, false, false, false, false, false, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello world"}, 20, 4, false, false, false, nil, "1s")
 	if !strings.Contains(pane, "hello") {
 		t.Fatalf("expected short pane to keep output visible, got %q", pane)
 	}
@@ -198,22 +198,15 @@ func TestViewMaximizedShowsOnlyActivePane(t *testing.T) {
 	}
 }
 
-func TestRenderPaneShowsScrollModeTitle(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, false, false, true, false, nil, "1s")
-	if !strings.Contains(pane, "SCROLL") {
-		t.Fatalf("expected scroll mode title, got %q", pane)
-	}
-}
-
-func TestRenderPaneShowsSelectModeTitle(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, false, false, false, true, nil, "1s")
-	if !strings.Contains(pane, "SELECT") {
-		t.Fatalf("expected select mode title, got %q", pane)
+func TestRenderPaneShowsActiveNormalTitle(t *testing.T) {
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, false, false, nil, "1s")
+	if !strings.Contains(pane, "NORMAL") {
+		t.Fatalf("expected normal title, got %q", pane)
 	}
 }
 
 func TestRenderPaneActiveStoppedUsesActiveBorder(t *testing.T) {
-	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, true, false, false, false, nil, "1s")
+	pane := renderPane(DefaultTheme(), "demo", process.DisplayState{Output: "hello"}, 20, 6, true, true, false, nil, "1s")
 	if !strings.Contains(pane, "38;2;255;135;0") {
 		t.Fatalf("expected active border color escape in %q", pane)
 	}
@@ -234,6 +227,25 @@ func TestFitViewportLinesHighlightsSelectedColumns(t *testing.T) {
 
 	if !strings.Contains(lines[0], "\x1b[") {
 		t.Fatalf("expected selected columns styled, got %q", lines[0])
+	}
+}
+
+func TestFitViewportLinesDoesNotHighlightEmptySelectionRows(t *testing.T) {
+	lines := fitViewportLines(DefaultTheme(), &paneViewport{
+		Lines:             []string{"alpha", "", "beta"},
+		PlainLines:        []string{"alpha", "", "beta"},
+		SelectionActive:   true,
+		SelectionStartRow: 0,
+		SelectionStartCol: 0,
+		SelectionEndRow:   2,
+		SelectionEndCol:   3,
+	}, 3, 8)
+
+	if strings.Contains(lines[1], "\x1b[") {
+		t.Fatalf("expected empty row to remain unstyled, got %q", lines[1])
+	}
+	if !strings.Contains(lines[0], "\x1b[") || !strings.Contains(lines[2], "\x1b[") {
+		t.Fatalf("expected non-empty rows to remain selected, got %#v", lines)
 	}
 }
 
