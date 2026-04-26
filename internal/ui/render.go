@@ -78,7 +78,7 @@ func renderStatusLine(theme Theme, width int, segments []statusSegment) string {
 }
 
 // insertMode is read only when active is true: green border/title in insert, orange in normal.
-func renderPane(theme Theme, title string, output process.DisplayState, width, height int, active bool, stopped bool, insertMode bool, scrollMode bool, selectMode bool, viewport *paneViewport, timer string) string {
+func renderPane(theme Theme, title string, output process.DisplayState, width, height int, active bool, stopped bool, insertMode bool, viewport *paneViewport, timer string) string {
 	innerW := width - 2
 	innerH := height - 2
 	if innerW < 1 {
@@ -95,10 +95,6 @@ func renderPane(theme Theme, title string, output process.DisplayState, width, h
 	if active {
 		if insertMode {
 			displayTitle += " · INSERT"
-		} else if selectMode {
-			displayTitle += " · SELECT"
-		} else if scrollMode {
-			displayTitle += " · SCROLL"
 		} else {
 			displayTitle += " · NORMAL"
 		}
@@ -416,6 +412,10 @@ func fitViewportLines(theme Theme, viewport *paneViewport, n, maxWidth int) []st
 
 		if viewport.SelectionActive {
 			if startCol, endCol, ok := selectionColumnsForRow(viewport, i, maxWidth); ok {
+				if strings.TrimSpace(sliceByCells(plainLine, startCol, endCol)) == "" {
+					lines[i] = line
+					continue
+				}
 				lines[i] = renderSelectedColumns(theme, plainLine, startCol, endCol)
 				continue
 			}
