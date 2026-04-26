@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.20](https://github.com/rikvanderkemp/muxedo/compare/v0.1.19...v0.1.20) (2026-04-26)
+
+
+### Features
+
+* **ui:** enhance scrollback and add help overlay ([#58](https://github.com/rikvanderkemp/muxedo/issues/58)) ([2d2f727](https://github.com/rikvanderkemp/muxedo/commit/2d2f727b6203ff9ae50072294bb5a828427d1e9b))
+
 ## [0.1.19](https://github.com/rikvanderkemp/muxedo/compare/v0.1.18...v0.1.19) (2026-04-26)
 
 
