@@ -161,6 +161,32 @@ func TestFitLinesKeepsBlankCursorRowVisible(t *testing.T) {
 	}
 }
 
+func TestFloatOverlayCenteredKeepsBaseAround(t *testing.T) {
+	base := strings.Join([]string{
+		"AAAAAAAAAA",
+		"BBBBBBBBBB",
+		"CCCCCCCCCC",
+		"DDDDDDDDDD",
+		"EEEEEEEEEE",
+	}, "\n")
+	overlay := "XXX\nXXX"
+	got := floatOverlayCentered(base, overlay, 10, 5)
+	gotLines := strings.Split(got, "\n")
+	if len(gotLines) != 5 {
+		t.Fatalf("expected 5 lines, got %d: %#v", len(gotLines), gotLines)
+	}
+	if gotLines[0] != "AAAAAAAAAA" || gotLines[4] != "EEEEEEEEEE" {
+		t.Fatalf("expected first/last base lines preserved, got %#v", gotLines)
+	}
+	mid := ansi.Strip(gotLines[2])
+	if !strings.Contains(mid, "XXX") {
+		t.Fatalf("expected overlay rendered in middle row, got %q", mid)
+	}
+	if !strings.HasPrefix(mid, "CCC") || !strings.HasSuffix(mid, "CCC") {
+		t.Fatalf("expected base C cells around overlay, got %q", mid)
+	}
+}
+
 func TestRenderStatusLineUsesThemeColors(t *testing.T) {
 	theme := DefaultTheme()
 	theme.StatusBarFG = "#112233"

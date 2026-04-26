@@ -1163,6 +1163,9 @@ func TestStatusHintRunningNormalShowsNormalShortcuts(t *testing.T) {
 	model.panelRunning = func(*process.Panel) bool { return true }
 
 	hint := model.statusHint()
+	if !strings.Contains(hint, "?: help") {
+		t.Fatalf("expected help hint in status hint, got: %q", hint)
+	}
 	if !strings.Contains(hint, "NORMAL: I insert") {
 		t.Fatalf("expected normal status hint, got: %q", hint)
 	}
@@ -1175,8 +1178,8 @@ func TestStatusHintRunningNormalShowsNormalShortcuts(t *testing.T) {
 	if !strings.Contains(hint, "hjkl panes") {
 		t.Fatalf("expected normal hint to mention hjkl panes, got: %q", hint)
 	}
-	if !strings.Contains(hint, "PgUp/PgDn") || !strings.Contains(hint, "drag select") {
-		t.Fatalf("expected normal hint to mention scroll and selection, got: %q", hint)
+	if !strings.Contains(hint, "S scrollback") || !strings.Contains(hint, "drag select") {
+		t.Fatalf("expected normal hint to mention scrollback and selection, got: %q", hint)
 	}
 }
 
@@ -1222,6 +1225,9 @@ func TestStatusHintUnfocusedMentionsFocusAndQuit(t *testing.T) {
 		process.New("one", "echo one", "", "."),
 	})
 	hint := model.statusHint()
+	if !strings.Contains(hint, "?: help") {
+		t.Fatalf("expected help hint in unfocused hint, got: %q", hint)
+	}
 	if !strings.Contains(hint, "click/1–9") || !strings.Contains(hint, "Ctrl-C quit") {
 		t.Fatalf("expected unfocused hint for focus and quit, got: %q", hint)
 	}
@@ -1275,30 +1281,129 @@ func TestViewStatusLineIncludesMode(t *testing.T) {
 	}
 }
 
-func TestPgUpShowsScrollViewport(t *testing.T) {
+func TestHelpDialogToggleInNormalMode(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
-	model.activePanel = 0
-	model.width = 80
-	model.height = 12
 	model.panelRunning = func(*process.Panel) bool { return true }
-	model.historyLines = func(*process.Panel) []process.HistoryLine {
-		return historyLinesOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
-	}
 
-	next, _ := model.Update(keySpecial(tea.KeyPgUp))
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
 	model = next.(Model)
 
-	if model.scrollOffsets[0] == 0 {
-		t.Fatal("expected pgup to move viewport away from live bottom")
+	next, _ = model.Update(keyRune('1'))
+	model = next.(Model)
+	if model.activePanel != 0 {
+		t.Fatalf("precondition: expected panel focused")
 	}
-	if vp := model.viewportForPanel(0, 11); vp == nil {
-		t.Fatal("expected scrolled panel to render a history viewport")
+
+	next, _ = model.Update(keyRune('?'))
+	model = next.(Model)
+	if !model.helpActive {
+		t.Fatalf("expected helpActive true after '?'")
+	}
+	view := model.View()
+	if !strings.Contains(view.Content, "Help") {
+		t.Fatalf("expected help dialog in view, got %q", view.Content)
+	}
+
+	// While help open: other keys swallowed.
+	next, _ = model.Update(keyRune('m'))
+	model = next.(Model)
+	if model.maximizedPanel != -1 {
+		t.Fatalf("expected maximize not to trigger while help open")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = next.(Model)
+	if model.helpActive {
+		t.Fatalf("expected helpActive false after Esc")
 	}
 }
 
-func TestEscFromScrolledViewportReturnsToLiveBeforeBlur(t *testing.T) {
+func TestHelpDialogDoesNotOpenInInsertMode(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	model = next.(Model)
+	next, _ = model.Update(keyRune('1'))
+	model = next.(Model)
+
+	// Enter insert mode.
+	next, _ = model.Update(keyRune('i'))
+	model = next.(Model)
+	if !model.panelInsertMode {
+		t.Fatalf("precondition: expected insert mode")
+	}
+
+	next, _ = model.Update(keyRune('?'))
+	model = next.(Model)
+	if model.helpActive {
+		t.Fatalf("expected help not to open in insert mode")
+	}
+}
+
+func TestPanelScrollInputsDoNothingOutsideScrollback(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	var historyCalls int
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		historyCalls++
+		return historyLinesOf("0", "1", "2", "3")
+	}
+
+	for _, msg := range []tea.Msg{
+		keySpecial(tea.KeyPgUp),
+		keySpecial(tea.KeyPgDown),
+		mouseWheel(1, 1, tea.MouseWheelUp),
+		mouseWheel(1, 1, tea.MouseWheelDown),
+	} {
+		next, _ := model.Update(msg)
+		model = next.(Model)
+	}
+
+	if model.scrollbackActive {
+		t.Fatal("expected scrollback to stay closed in normal mode")
+	}
+	if historyCalls != 0 {
+		t.Fatalf("expected normal scroll inputs not to read history, got %d calls", historyCalls)
+	}
+
+	model.panelInsertMode = true
+	var writes int
+	model.sendInput = func(*process.Panel, []byte) error {
+		writes++
+		return nil
+	}
+	for _, msg := range []tea.Msg{
+		keySpecial(tea.KeyPgUp),
+		keySpecial(tea.KeyPgDown),
+		mouseWheel(1, 1, tea.MouseWheelUp),
+		mouseWheel(1, 1, tea.MouseWheelDown),
+	} {
+		next, _ := model.Update(msg)
+		model = next.(Model)
+	}
+
+	if model.scrollbackActive {
+		t.Fatal("expected scrollback to stay closed in insert mode")
+	}
+	if historyCalls != 0 {
+		t.Fatalf("expected insert scroll inputs not to read history, got %d calls", historyCalls)
+	}
+	if writes != 0 {
+		t.Fatalf("expected scroll inputs not to be forwarded in insert mode, got %d writes", writes)
+	}
+}
+
+func TestSFromFocusedNormalOpensScrollbackAtBottom(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -1310,24 +1415,717 @@ func TestEscFromScrolledViewportReturnsToLiveBeforeBlur(t *testing.T) {
 		return historyLinesOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 	}
 
-	next, _ := model.Update(keySpecial(tea.KeyPgUp))
+	next, _ := model.Update(keyRune('s'))
 	model = next.(Model)
-	if model.scrollOffsets[0] == 0 {
-		t.Fatal("expected pgup to scroll back")
+
+	if !model.scrollbackActive {
+		t.Fatal("expected scrollback to open")
 	}
+	if model.scrollbackPanel != 0 {
+		t.Fatalf("expected scrollback panel 0, got %d", model.scrollbackPanel)
+	}
+	if got, want := len(model.scrollbackLines), 10; got != want {
+		t.Fatalf("expected cached history length %d, got %d", want, got)
+	}
+	if !model.scrollbackView.AtBottom() {
+		t.Fatalf("expected scrollback at bottom, offset=%d", model.scrollbackView.YOffset())
+	}
+	view := model.View()
+	if !strings.Contains(view.Content, "[1] one · SCROLLBACK") {
+		t.Fatalf("expected scrollback title in view, got %q", view.Content)
+	}
+	if !strings.Contains(view.Content, "MODE: SCROLLBACK") {
+		t.Fatalf("expected scrollback mode in status line, got %q", view.Content)
+	}
+}
+
+func TestScrollbackLineNumbersDefaultOn(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	if !model.scrollbackActive {
+		t.Fatal("expected scrollback to open")
+	}
+
+	content := model.scrollbackView.GetContent()
+	if !strings.Contains(content, "1 │") || !strings.Contains(content, "alpha") || !strings.Contains(content, "2 │") || !strings.Contains(content, "beta") {
+		t.Fatalf("expected numbered scrollback content, got %q", content)
+	}
+}
+
+func TestScrollbackToggleLineNumbersWithLDoesNotAffectCopyText(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	if !model.scrollbackActive {
+		t.Fatal("expected scrollback to open")
+	}
+
+	model.ensureScrollState()
+	model.selections[0] = panelSelection{
+		Active:   true,
+		Source:   selectSourceHistory,
+		StartRow: 0,
+		StartCol: 0,
+		EndRow:   1,
+		EndCol:   3,
+	}
+	if got := model.currentSelectionText(); got != "alpha\nbeta" {
+		t.Fatalf("selection text = %q, want %q", got, "alpha\nbeta")
+	}
+
+	next, _ = model.Update(keyRune('l'))
+	model = next.(Model)
+
+	content := model.scrollbackView.GetContent()
+	if strings.Contains(content, "│") {
+		t.Fatalf("expected line numbers hidden after l toggle, got %q", content)
+	}
+	if got := model.currentSelectionText(); got != "alpha\nbeta" {
+		t.Fatalf("selection text after toggle = %q, want %q", got, "alpha\nbeta")
+	}
+}
+
+func TestScrollbackRRefreshesContent(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	var history []process.HistoryLine
+	history = historyLinesOf("alpha")
+	model.historyLines = func(*process.Panel) []process.HistoryLine { return history }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	before := model.scrollbackView.GetContent()
+	if !strings.Contains(before, "alpha") {
+		t.Fatalf("expected initial content to contain alpha, got %q", before)
+	}
+
+	history = historyLinesOf("alpha", "beta")
+	next, _ = model.Update(keyRune('r'))
+	model = next.(Model)
+	after := model.scrollbackView.GetContent()
+	if !strings.Contains(after, "beta") {
+		t.Fatalf("expected refreshed content to contain beta, got %q", after)
+	}
+}
+
+func TestScrollbackRefreshInsertsPersistentMarkersAndNewContentAfter(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	history := historyLinesOf("alpha", "beta")
+	model.historyLines = func(*process.Panel) []process.HistoryLine { return history }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	next, _ = model.Update(keyRune('r'))
+	model = next.(Model)
+	content1 := model.scrollbackView.GetContent()
+	if !strings.Contains(content1, "refreshed at") {
+		t.Fatalf("expected refresh marker inserted, got %q", content1)
+	}
+	if !strings.Contains(content1, "beta") {
+		t.Fatalf("expected content to include beta, got %q", content1)
+	}
+
+	history = historyLinesOf("alpha", "beta", "gamma")
+	next, _ = model.Update(keyRune('r'))
+	model = next.(Model)
+
+	content2 := model.scrollbackView.GetContent()
+	iBeta := strings.Index(content2, "beta")
+	iGamma := strings.Index(content2, "gamma")
+	iMark := strings.Index(content2, "refreshed at")
+	if iBeta < 0 || iGamma < 0 || iMark < 0 {
+		t.Fatalf("expected beta, marker, gamma present; got %q", content2)
+	}
+	if !(iBeta < iMark && iMark < iGamma) {
+		t.Fatalf("expected order beta < marker < gamma, got indexes beta=%d marker=%d gamma=%d content=%q", iBeta, iMark, iGamma, content2)
+	}
+}
+
+func TestScrollbackMarkerRowIgnoresClick(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	// Put cursor somewhere stable.
+	model.setScrollbackCursorLine(1)
+	beforeCursor := model.scrollbackCursorLine
+
+	next, _ = model.Update(keyRune('r'))
+	model = next.(Model)
+
+	// Find marker display row.
+	markerRow := -1
+	for i, h := range model.scrollbackDisplayToHistory {
+		if h < 0 {
+			markerRow = i
+			break
+		}
+	}
+	if markerRow < 0 {
+		t.Fatalf("expected marker row in display mapping, got %v", model.scrollbackDisplayToHistory)
+	}
+
+	// Ensure marker row visible at top.
+	next, _ = model.Update(keyRune('g'))
+	model = next.(Model)
+
+	pw := model.scrollbackLineNumberPrefixWidth
+	next, _ = model.Update(mouseLeftClick(pw+1, 2+markerRow))
+	model = next.(Model)
+	if model.scrollbackCursorLine != beforeCursor {
+		t.Fatalf("expected marker click ignored, cursor=%d want %d", model.scrollbackCursorLine, beforeCursor)
+	}
+}
+
+func TestScrollbackRefreshMarkerAfterEmptySnapshotRendersBeforeFirstLine(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	history := []process.HistoryLine(nil)
+	model.historyLines = func(*process.Panel) []process.HistoryLine { return history }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	// First refresh while empty => marker AfterID==0.
+	next, _ = model.Update(keyRune('r'))
+	model = next.(Model)
+
+	// Now history becomes non-empty on next refresh.
+	history = historyLinesOf("alpha")
+	next, _ = model.Update(keyRune('r'))
+	model = next.(Model)
+
+	// Find first marker and ensure it is before first history line.
+	markerRow := -1
+	firstHistoryRow := -1
+	for i, h := range model.scrollbackDisplayToHistory {
+		if h < 0 && markerRow < 0 {
+			markerRow = i
+		}
+		if h == 0 && firstHistoryRow < 0 {
+			firstHistoryRow = i
+		}
+	}
+	if markerRow < 0 || firstHistoryRow < 0 {
+		t.Fatalf("expected marker+history rows, got displayToHistory=%v", model.scrollbackDisplayToHistory)
+	}
+	if markerRow > firstHistoryRow {
+		t.Fatalf("expected marker before first history line, markerRow=%d firstHistoryRow=%d map=%v", markerRow, firstHistoryRow, model.scrollbackDisplayToHistory)
+	}
+}
+
+func TestScrollbackShiftYAndShiftMCopyActions(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("ab ab", "xxabyy")
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+	for _, r := range []rune("ab") {
+		next, _ = model.Update(keyRune(r))
+		model = next.(Model)
+	}
+	next, _ = model.Update(keySpecial(tea.KeyEnter))
+	model = next.(Model)
+
+	// Shift+m path: Text=\"m\" with ModShift should behave like \"M\".
+	copied = ""
+	next, _ = model.Update(tea.KeyPressMsg{Text: "m", Mod: tea.ModShift})
+	model = next.(Model)
+	if copied != "ab\nab\nab" {
+		t.Fatalf("shift+m copied=%q, want %q", copied, "ab\nab\nab")
+	}
+
+	// Shift+y path: Text=\"y\" with ModShift should behave like \"Y\".
+	copied = ""
+	next, _ = model.Update(tea.KeyPressMsg{Text: "y", Mod: tea.ModShift})
+	model = next.(Model)
+	if !strings.Contains(copied, "1: ab ab") || !strings.Contains(copied, "2: xxabyy") {
+		t.Fatalf("shift+y copied=%q, want both lines with numbering", copied)
+	}
+}
+
+func TestScrollbackSearchSlashEntersModeAndEnterJumpsBestMatch(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "Beta", "gamma", "beta again")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	// Put cursor at top so best match should be first beta (case-insensitive).
+	model.setScrollbackCursorLine(0)
+
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+	if !model.scrollbackSearchActive {
+		t.Fatal("expected / to enter scrollback search mode")
+	}
+	for _, r := range []rune("beta") {
+		next, _ = model.Update(keyRune(r))
+		model = next.(Model)
+	}
+	content := model.scrollbackView.GetContent()
+	if ansi.Strip(content) == content {
+		t.Fatalf("expected search to add highlight ANSI codes, got %q", content)
+	}
+	next, _ = model.Update(keySpecial(tea.KeyEnter))
+	model = next.(Model)
+	if model.scrollbackSearchActive {
+		t.Fatal("expected Enter to exit search mode")
+	}
+	if model.scrollbackCursorLine != 1 {
+		t.Fatalf("expected best match to jump to line 1, got %d", model.scrollbackCursorLine)
+	}
+}
+
+func TestScrollbackSearchInvalidRegexDoesNotClearLastValidMatches(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta", "gamma", "beta2")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+	for _, r := range []rune("beta") {
+		next, _ = model.Update(keyRune(r))
+		model = next.(Model)
+	}
+	if model.scrollbackSearchErr != "" {
+		t.Fatalf("expected valid regex, got err %q", model.scrollbackSearchErr)
+	}
+	if got := len(model.scrollbackSearchMatches); got != 2 {
+		t.Fatalf("expected 2 matches for beta, got %d", got)
+	}
+
+	// Make regex invalid: add unclosed bracket.
+	next, _ = model.Update(keyRune('['))
+	model = next.(Model)
+	if model.scrollbackSearchErr == "" {
+		t.Fatal("expected invalid regex error after adding '['")
+	}
+	if got := len(model.scrollbackSearchMatches); got != 2 {
+		t.Fatalf("expected invalid regex to preserve previous matches, got len=%d", got)
+	}
+}
+
+func TestScrollbackSearchNAndNWrap(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("beta", "x", "beta", "y")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	model.setScrollbackCursorLine(0)
+
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+	for _, r := range []rune("beta") {
+		next, _ = model.Update(keyRune(r))
+		model = next.(Model)
+	}
+	next, _ = model.Update(keySpecial(tea.KeyEnter))
+	model = next.(Model)
+	if model.scrollbackCursorLine != 0 {
+		t.Fatalf("expected initial best match at line 0, got %d", model.scrollbackCursorLine)
+	}
+
+	next, _ = model.Update(keyRune('n'))
+	model = next.(Model)
+	if model.scrollbackCursorLine != 2 {
+		t.Fatalf("expected n to jump to next match line 2, got %d", model.scrollbackCursorLine)
+	}
+
+	next, _ = model.Update(keyRune('n'))
+	model = next.(Model)
+	if model.scrollbackCursorLine != 0 {
+		t.Fatalf("expected n to wrap to first match line 0, got %d", model.scrollbackCursorLine)
+	}
+
+	next, _ = model.Update(keyRune('N'))
+	model = next.(Model)
+	if model.scrollbackCursorLine != 2 {
+		t.Fatalf("expected N to wrap to last match line 2, got %d", model.scrollbackCursorLine)
+	}
+}
+
+func TestScrollbackYCopiesAllSearchMatchesWithLineNumbers(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "Beta", "", "beta again")
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+	for _, r := range []rune("beta") {
+		next, _ = model.Update(keyRune(r))
+		model = next.(Model)
+	}
+	next, _ = model.Update(keySpecial(tea.KeyEnter))
+	model = next.(Model)
+
+	next, _ = model.Update(keyRune('Y'))
+	model = next.(Model)
+
+	if copied == "" {
+		t.Fatal("expected Y to copy matches")
+	}
+	if !strings.Contains(copied, "2: Beta") || !strings.Contains(copied, "4: beta again") {
+		t.Fatalf("unexpected copied content: %q", copied)
+	}
+	if strings.Contains(copied, "3:") {
+		t.Fatalf("expected empty line to be skipped, got %q", copied)
+	}
+}
+
+func TestScrollbackYWithoutSearchMatchesWarns(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta")
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('Y'))
+	model = next.(Model)
+
+	if copied != "" {
+		t.Fatalf("expected no copy without matches, got %q", copied)
+	}
+	if len(model.messageBuffer) == 0 || !strings.Contains(model.messageBuffer[len(model.messageBuffer)-1], "no search matches") {
+		t.Fatalf("expected warning message, got %v", model.messageBuffer)
+	}
+}
+
+func TestScrollbackMCopiesOnlyMatchedSubstringsOnePerLine(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("ab ab", "xxabyy", "nope")
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+	for _, r := range []rune("ab") {
+		next, _ = model.Update(keyRune(r))
+		model = next.(Model)
+	}
+	next, _ = model.Update(keySpecial(tea.KeyEnter))
+	model = next.(Model)
+
+	next, _ = model.Update(keyRune('M'))
+	model = next.(Model)
+
+	if copied != "ab\nab\nab" {
+		t.Fatalf("copied = %q, want %q", copied, "ab\nab\nab")
+	}
+}
+
+func TestScrollbackMWithoutSearchMatchesWarns(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta")
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('M'))
+	model = next.(Model)
+
+	if copied != "" {
+		t.Fatalf("expected no copy without matches, got %q", copied)
+	}
+	if len(model.messageBuffer) == 0 || !strings.Contains(model.messageBuffer[len(model.messageBuffer)-1], "no search matches") {
+		t.Fatalf("expected warning message, got %v", model.messageBuffer)
+	}
+}
+
+func TestScrollbackClickThenBBookmarksLine(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta", "gamma")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	pw := model.scrollbackLineNumberPrefixWidth
+	// Click first row ("alpha"), then bookmark it.
+	next, _ = model.Update(mouseLeftClick(pw+1, 2))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('m'))
+	model = next.(Model)
+
+	content := model.scrollbackView.GetContent()
+	if !strings.Contains(content, "● alpha") {
+		t.Fatalf("expected bookmark marker on alpha line, got %q", content)
+	}
+}
+
+func TestScrollbackArrowDownMovesCursorHighlight(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta", "gamma")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	// Cursor starts at last line.
+	if model.scrollbackCursorLine != 2 {
+		t.Fatalf("expected cursor at last line, got %d", model.scrollbackCursorLine)
+	}
+
+	next, _ = model.Update(keySpecial(tea.KeyUp))
+	model = next.(Model)
+	if model.scrollbackCursorLine != 1 {
+		t.Fatalf("expected cursor to move up, got %d", model.scrollbackCursorLine)
+	}
+}
+
+func TestScrollbackDoubleClickTogglesMark(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "beta", "gamma")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	pw := model.scrollbackLineNumberPrefixWidth
+	// Prime last click to simulate a double click on line 0.
+	model.scrollbackLastClickLine = 0
+	model.scrollbackLastClickAt = time.Now()
+	next, _ = model.Update(mouseLeftClick(pw+1, 2))
+	model = next.(Model)
+
+	content := model.scrollbackView.GetContent()
+	if !strings.Contains(content, "● alpha") {
+		t.Fatalf("expected double click to mark alpha, got %q", content)
+	}
+}
+
+func TestSWithoutActivePanelDoesNothing(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	if model.scrollbackActive {
+		t.Fatal("expected scrollback to stay closed without an active panel")
+	}
+}
+
+func TestSInInsertModeDoesNotOpenScrollback(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.panelInsertMode = true
+	model.panelRunning = func(*process.Panel) bool { return true }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+
+	if model.scrollbackActive {
+		t.Fatal("expected scrollback to stay closed in insert mode")
+	}
+}
+
+func TestEscFromScrollbackReturnsToFocusedNormal(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 80
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	if !model.scrollbackActive {
+		t.Fatal("expected scrollback to open")
+	}
+
 	next, _ = model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 	if model.activePanel != 0 {
-		t.Fatalf("expected first Esc to keep panel focused, got %d", model.activePanel)
+		t.Fatalf("expected Esc to keep panel focused, got %d", model.activePanel)
 	}
-	if model.scrollOffsets[0] != 0 {
-		t.Fatalf("expected first Esc to return to live bottom, got offset %d", model.scrollOffsets[0])
+	if model.scrollbackActive {
+		t.Fatal("expected Esc to close scrollback")
+	}
+	if model.panelInsertMode {
+		t.Fatal("expected normal mode after closing scrollback")
 	}
 
 	next, _ = model.Update(keySpecial(tea.KeyEsc))
 	model = next.(Model)
 	if model.activePanel != -1 {
-		t.Fatalf("expected second Esc to blur panel, got %d", model.activePanel)
+		t.Fatalf("expected next Esc to blur panel, got %d", model.activePanel)
 	}
 }
 
@@ -1485,36 +2283,32 @@ func TestEnteringInsertModeClearsActiveSelection(t *testing.T) {
 	}
 }
 
-func TestHistoryMouseSelectionUsesScrolledViewport(t *testing.T) {
+func TestIWhileScrollbackOpenDoesNotEnterInsertMode(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
 	model.activePanel = 0
-	model.width = 20
-	model.height = 8
+	model.width = 80
+	model.height = 12
 	model.panelRunning = func(*process.Panel) bool { return true }
 	model.historyLines = func(*process.Panel) []process.HistoryLine {
-		return historyLinesOf("alpha", "beta", "gamma", "delta", "epsilon")
+		return historyLinesOf("0", "1", "2", "3")
 	}
 
-	next, _ := model.Update(keySpecial(tea.KeyPgUp))
+	next, _ := model.Update(keyRune('s'))
 	model = next.(Model)
-	next, _ = model.Update(mouseLeftClick(2, 2))
-	model = next.(Model)
-	next, _ = model.Update(mouseMotion(4, 3, tea.MouseLeft))
-	model = next.(Model)
-	next, _ = model.Update(mouseRelease(4, 3, tea.MouseLeft))
+	next, _ = model.Update(keyRune('i'))
 	model = next.(Model)
 
-	if model.selections[0].Source != selectSourceHistory {
-		t.Fatalf("expected history selection source, got %v", model.selections[0].Source)
+	if !model.scrollbackActive {
+		t.Fatal("expected scrollback to remain open")
 	}
-	if got := model.currentSelectionText(); got != "lpha\nbeta" {
-		t.Fatalf("expected history selection text, got %q", got)
+	if model.panelInsertMode {
+		t.Fatal("expected i not to enter insert mode while scrollback is open")
 	}
 }
 
-func TestScrollViewportConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
+func TestScrollbackViewportConsumesNavigation(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -1525,30 +2319,127 @@ func TestScrollViewportConsumesPgUpPgDownAndMouseWheel(t *testing.T) {
 		return historyLinesOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 	}
 	model.panelRunning = func(*process.Panel) bool { return true }
-	model.ensureScrollState()
-	model.scrollSelections[0] = 9
 
-	next, _ := model.Update(keySpecial(tea.KeyPgUp))
+	next, _ := model.Update(keyRune('s'))
 	model = next.(Model)
-	if model.scrollOffsets[0] == 0 {
-		t.Fatal("expected pgup to move viewport away from bottom")
+	bottom := model.scrollbackView.YOffset()
+	if bottom == 0 {
+		t.Fatal("test requires content taller than scrollback viewport")
 	}
 
-	offsetAfterPgUp := model.scrollOffsets[0]
-	next, _ = model.Update(mouseWheel(1, 1, tea.MouseWheelDown))
+	next, _ = model.Update(keySpecial(tea.KeyPgUp))
 	model = next.(Model)
-	if model.scrollOffsets[0] >= offsetAfterPgUp {
-		t.Fatalf("expected wheel down to move viewport toward live bottom, got %d -> %d", offsetAfterPgUp, model.scrollOffsets[0])
+	if model.scrollbackView.YOffset() >= bottom {
+		t.Fatalf("expected PgUp to move toward top, got %d from %d", model.scrollbackView.YOffset(), bottom)
 	}
 
 	next, _ = model.Update(keySpecial(tea.KeyPgDown))
 	model = next.(Model)
-	if model.scrollOffsets[0] != 0 {
-		t.Fatalf("expected pgdown to return to live bottom, got offset %d", model.scrollOffsets[0])
+	if model.scrollbackView.YOffset() != bottom {
+		t.Fatalf("expected PgDn to return to bottom, got offset %d", model.scrollbackView.YOffset())
+	}
+
+	next, _ = model.Update(mouseWheel(1, 2, tea.MouseWheelUp))
+	model = next.(Model)
+	if model.scrollbackView.YOffset() >= bottom {
+		t.Fatalf("expected wheel up to move toward top, got %d", model.scrollbackView.YOffset())
+	}
+
+	next, _ = model.Update(mouseWheel(1, 2, tea.MouseWheelDown))
+	model = next.(Model)
+	if model.scrollbackView.YOffset() != bottom {
+		t.Fatalf("expected wheel down to return to bottom, got %d", model.scrollbackView.YOffset())
+	}
+
+	next, _ = model.Update(keyRune('g'))
+	model = next.(Model)
+	if model.scrollbackView.YOffset() != 0 {
+		t.Fatalf("expected g to jump to top, got %d", model.scrollbackView.YOffset())
+	}
+
+	next, _ = model.Update(keyRune('j'))
+	model = next.(Model)
+	if model.scrollbackView.YOffset() != 1 {
+		t.Fatalf("expected j to scroll down one line, got %d", model.scrollbackView.YOffset())
+	}
+
+	next, _ = model.Update(keyRune('k'))
+	model = next.(Model)
+	if model.scrollbackView.YOffset() != 0 {
+		t.Fatalf("expected k to scroll up one line, got %d", model.scrollbackView.YOffset())
+	}
+
+	next, _ = model.Update(keySpecial(tea.KeyDown))
+	model = next.(Model)
+	if model.scrollbackCursorLine != len(model.scrollbackLines)-1 {
+		t.Fatalf("expected down arrow to keep cursor at bottom line, got %d", model.scrollbackCursorLine)
+	}
+
+	next, _ = model.Update(keySpecial(tea.KeyUp))
+	model = next.(Model)
+	if model.scrollbackCursorLine != len(model.scrollbackLines)-2 {
+		t.Fatalf("expected up arrow to move cursor up one line, got %d", model.scrollbackCursorLine)
+	}
+
+	next, _ = model.Update(keyRune('G'))
+	model = next.(Model)
+	if model.scrollbackView.YOffset() != bottom {
+		t.Fatalf("expected G to jump to bottom, got %d", model.scrollbackView.YOffset())
 	}
 }
 
-func TestScrollViewportSelectionAndMarkPersistAcrossAppend(t *testing.T) {
+func TestScrollbackMouseSelectionCopiesAndSkipsEmptyLines(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 20
+	model.height = 12
+	model.panelRunning = func(*process.Panel) bool { return true }
+	model.historyLines = func(*process.Panel) []process.HistoryLine {
+		return historyLinesOf("alpha", "", "   ", "beta", "gamma")
+	}
+
+	var copied string
+	model.copySelection = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	pw := model.scrollbackLineNumberPrefixWidth
+	startX := pw + 1 // text col 0
+	endX := pw + 4   // text col 3
+	next, _ = model.Update(mouseLeftClick(startX, 2))
+	model = next.(Model)
+	next, _ = model.Update(mouseMotion(endX, 5, tea.MouseLeft))
+	model = next.(Model)
+	next, _ = model.Update(mouseRelease(endX, 5, tea.MouseLeft))
+	model = next.(Model)
+
+	if model.selections[0].Source != selectSourceHistory {
+		t.Fatalf("expected history selection source, got %v", model.selections[0].Source)
+	}
+	if got := model.currentSelectionText(); got != "alpha\nbeta" {
+		t.Fatalf("expected history selection text, got %q", got)
+	}
+
+	next, _ = model.Update(keyRune('y'))
+	model = next.(Model)
+	if copied != "alpha\nbeta" {
+		t.Fatalf("expected copied history text, got %q", copied)
+	}
+
+	copied = ""
+	next, _ = model.Update(keySpecial(tea.KeyEnter))
+	model = next.(Model)
+	if copied != "alpha\nbeta" {
+		t.Fatalf("expected Enter to copy history text, got %q", copied)
+	}
+}
+
+func TestResizeUpdatesScrollbackViewport(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -1556,167 +2447,45 @@ func TestScrollViewportSelectionAndMarkPersistAcrossAppend(t *testing.T) {
 	model.width = 80
 	model.height = 12
 	model.panelRunning = func(*process.Panel) bool { return true }
-
-	history := []string{"0", "1", "2", "3", "4", "5", "6", "7"}
 	model.historyLines = func(*process.Panel) []process.HistoryLine {
-		return historyLinesOf(history...)
-	}
-	model.ensureScrollState()
-	model.scrollSelections[0] = 6
-	model.scrollOffsets[0] = 1
-
-	model.toggleMark()
-	if model.scrollMarks[0] != 7 {
-		t.Fatalf("expected mark at selected line, got %d", model.scrollMarks[0])
+		return historyLinesOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 	}
 
-	history = append(history, "8", "9")
-	vp := model.viewportForPanel(0, 11)
-	if vp.MarkedRow == -1 {
-		t.Fatal("expected marked line to remain visible")
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('g'))
+	model = next.(Model)
+
+	next, _ = model.Update(tea.WindowSizeMsg{Width: 60, Height: 8})
+	model = next.(Model)
+
+	if got, want := model.scrollbackView.Width(), 58; got != want {
+		t.Fatalf("scrollback width = %d, want %d", got, want)
 	}
-	if vp.Lines[vp.MarkedRow] != "6" {
-		t.Fatalf("expected original marked content to remain highlighted, got %q", vp.Lines[vp.MarkedRow])
+	if got, want := model.scrollbackView.Height(), 4; got != want {
+		t.Fatalf("scrollback height = %d, want %d", got, want)
+	}
+	if model.scrollbackView.YOffset() < 0 || model.scrollbackView.YOffset() > model.scrollbackView.TotalLineCount()-model.scrollbackView.Height() {
+		t.Fatalf("scrollback offset out of range: %d", model.scrollbackView.YOffset())
 	}
 }
 
-func TestScrollViewportMarkedLineScrollsOffButCanBeFoundAgain(t *testing.T) {
+func TestStatusModeLabelShowsScrollback(t *testing.T) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
 	model.activePanel = 0
 	model.width = 80
 	model.height = 12
-	model.panelRunning = func(*process.Panel) bool { return true }
-
-	history := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 	model.historyLines = func(*process.Panel) []process.HistoryLine {
-		return historyLinesOf(history...)
-	}
-	model.ensureScrollState()
-	model.scrollSelections[0] = 8
-
-	model.toggleMark()
-	if model.scrollMarks[0] != 9 {
-		t.Fatalf("expected mark stored at line 8, got %d", model.scrollMarks[0])
+		return historyLinesOf("0", "1", "2")
 	}
 
-	history = append(history, "10", "11", "12", "13", "14", "15")
-	model.scrollOffsets[0] = 9
-	vp := model.viewportForPanel(0, 11)
-	if vp.MarkedRow != -1 {
-		t.Fatalf("expected marked line to scroll offscreen, got row %d", vp.MarkedRow)
-	}
-	if model.scrollMarks[0] != 9 {
-		t.Fatalf("expected mark to remain attached to the same history entry, got %d", model.scrollMarks[0])
-	}
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
 
-	model.scrollOffsets[0] = 1
-	vp = model.viewportForPanel(0, 11)
-	if vp.MarkedRow == -1 {
-		t.Fatal("expected marked line to be visible again after scrolling up")
-	}
-	if vp.Lines[vp.MarkedRow] != "8" {
-		t.Fatalf("expected marked content to remain line 8 after scrolling up, got %q", vp.Lines[vp.MarkedRow])
-	}
-}
-
-func TestScrollViewportRetainsMarkWhenLineTemporarilyMissing(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-	})
-	model.activePanel = 0
-	model.width = 80
-	model.height = 12
-	model.panelRunning = func(*process.Panel) bool { return true }
-
-	history := []process.HistoryLine{
-		{ID: 1, Text: "0"},
-		{ID: 2, Text: "1"},
-		{ID: 3, Text: "2"},
-		{ID: 4, Text: "3"},
-	}
-	model.historyLines = func(*process.Panel) []process.HistoryLine {
-		return append([]process.HistoryLine(nil), history...)
-	}
-	model.ensureScrollState()
-	model.scrollSelections[0] = 1
-
-	model.toggleMark()
-	if model.scrollMarks[0] != 2 {
-		t.Fatalf("expected initial mark, got %d", model.scrollMarks[0])
-	}
-
-	history = []process.HistoryLine{
-		{ID: 3, Text: "2"},
-		{ID: 4, Text: "3"},
-		{ID: 5, Text: "4"},
-		{ID: 6, Text: "5"},
-	}
-	model.scrollViewportBy(0)
-	if model.scrollMarks[0] != 2 {
-		t.Fatalf("expected mark retained while line is temporarily missing, got %d", model.scrollMarks[0])
-	}
-
-	history = []process.HistoryLine{
-		{ID: 2, Text: "1"},
-		{ID: 3, Text: "2"},
-		{ID: 4, Text: "3"},
-		{ID: 5, Text: "4"},
-	}
-	vp := model.historyViewportForPanel(0, 7)
-	if vp.MarkedRow == -1 {
-		t.Fatal("expected marked line to reappear when its history entry returns")
-	}
-	if vp.Lines[vp.MarkedRow] != "1" {
-		t.Fatalf("expected restored mark on original line, got %q", vp.Lines[vp.MarkedRow])
-	}
-}
-
-func TestScrollViewportMarkStaysOnOriginalDuplicateLine(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-	})
-	model.activePanel = 0
-	model.width = 80
-	model.height = 12
-	model.panelRunning = func(*process.Panel) bool { return true }
-
-	history := []string{"1", "2", "--- pause ---", "3", "4"}
-	model.historyLines = func(*process.Panel) []process.HistoryLine {
-		return historyLinesOf(history...)
-	}
-	model.ensureScrollState()
-	model.scrollSelections[0] = 2
-
-	model.toggleMark()
-	if model.scrollMarks[0] != 3 {
-		t.Fatalf("expected mark stored for the first duplicate line, got %d", model.scrollMarks[0])
-	}
-
-	history = append(history, "--- pause ---", "5", "6")
-	vp := model.historyViewportForPanel(0, 7)
-	if vp.MarkedRow == -1 {
-		t.Fatal("expected marked duplicate line to remain visible")
-	}
-	if vp.Lines[vp.MarkedRow] != "--- pause ---" {
-		t.Fatalf("expected marked line text to stay on pause line, got %q", vp.Lines[vp.MarkedRow])
-	}
-	if vp.MarkedRow != 1 {
-		t.Fatalf("expected original duplicate line to stay marked, got row %d", vp.MarkedRow)
-	}
-}
-
-func TestStatusModeLabelStaysNormalWhenScrolled(t *testing.T) {
-	model := NewModel([]*process.Panel{
-		process.New("one", "echo one", "", "."),
-	})
-	model.activePanel = 0
-	model.ensureScrollState()
-	model.scrollOffsets[0] = 1
-
-	if got := model.statusModeLabel(); got != "NORMAL" {
-		t.Fatalf("expected NORMAL when focused and scrolled, got %q", got)
+	if got := model.statusModeLabel(); got != "SCROLLBACK" {
+		t.Fatalf("expected SCROLLBACK when scrollback is open, got %q", got)
 	}
 }
 

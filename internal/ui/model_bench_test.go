@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -72,7 +73,7 @@ func BenchmarkModelViewLiveGrid(b *testing.B) {
 	}
 }
 
-func BenchmarkUpdateMouseWheelLargeHistory(b *testing.B) {
+func BenchmarkUpdateMouseWheelScrollbackLargeHistory(b *testing.B) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -84,6 +85,8 @@ func BenchmarkUpdateMouseWheelLargeHistory(b *testing.B) {
 	model.historyLines = func(*process.Panel) []process.HistoryLine {
 		return history
 	}
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
 	msg := mouseWheel(1, 1, tea.MouseWheelUp)
 
 	b.ReportAllocs()
@@ -110,7 +113,7 @@ func BenchmarkUpdatePrintableKeyInsert(b *testing.B) {
 	}
 }
 
-func BenchmarkViewportForPanelScrolledLargeHistory(b *testing.B) {
+func BenchmarkRenderScrollbackLargeHistory(b *testing.B) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -122,16 +125,16 @@ func BenchmarkViewportForPanelScrolledLargeHistory(b *testing.B) {
 	model.historyLines = func(*process.Panel) []process.HistoryLine {
 		return history
 	}
-	model.ensureScrollState()
-	model.scrollOffsets[0] = 100
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = model.viewportForPanel(0, 39)
+		_ = model.renderScrollback()
 	}
 }
 
-func BenchmarkSelectionLinesForPanelHistory(b *testing.B) {
+func BenchmarkScrollbackSelectionText(b *testing.B) {
 	model := NewModel([]*process.Panel{
 		process.New("one", "echo one", "", "."),
 	})
@@ -144,12 +147,80 @@ func BenchmarkSelectionLinesForPanelHistory(b *testing.B) {
 		return history
 	}
 	model.ensureScrollState()
-	model.scrollOffsets[0] = 100
-	model.selections[0] = panelSelection{Active: true, Source: selectSourceHistory}
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	model.selections[0] = panelSelection{
+		Active:   true,
+		Source:   selectSourceHistory,
+		StartRow: 100,
+		StartCol: 0,
+		EndRow:   120,
+		EndCol:   20,
+	}
 
 	b.ReportAllocs()
 	for b.Loop() {
-		_, _ = model.selectionLinesForPanel(0, model.activePaneLineCapacity())
+		_ = model.currentSelectionText()
+	}
+}
+
+// BenchmarkScrollbackSearchTyping exercises the full per-keystroke search path:
+// recompute -> rebuild display -> selection style. Tracks regression from
+// allocations in scrollbackBuildDisplay (display buf, after-map, highlight env).
+func BenchmarkScrollbackSearchTyping(b *testing.B) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 120
+	model.height = 40
+	model.panelRunning = func(*process.Panel) bool { return true }
+	history := benchmarkHistoryLines(5000)
+	model.historyLines = func(*process.Panel) []process.HistoryLine { return history }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	next, _ = model.Update(keyRune('/'))
+	model = next.(Model)
+
+	queries := []rune{'l', 'i', 'n', 'e', ' ', '1'}
+	backspace := tea.KeyPressMsg{Code: tea.KeyBackspace}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, r := range queries {
+			next, _ = model.Update(keyRune(r))
+			model = next.(Model)
+		}
+		for range queries {
+			next, _ = model.Update(backspace)
+			model = next.(Model)
+		}
+	}
+}
+
+// BenchmarkScrollbackBuildDisplayHighlight isolates the highlight + per-row
+// formatting loop with a regex matching ~10% of lines. Useful for tracking
+// fmt.Sprintf vs builder, lipgloss envelope caching, displayBuf reuse.
+func BenchmarkScrollbackBuildDisplayHighlight(b *testing.B) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "", "."),
+	})
+	model.activePanel = 0
+	model.width = 120
+	model.height = 40
+	model.panelRunning = func(*process.Panel) bool { return true }
+	history := benchmarkHistoryLines(5000)
+	model.historyLines = func(*process.Panel) []process.HistoryLine { return history }
+
+	next, _ := model.Update(keyRune('s'))
+	model = next.(Model)
+	model.scrollbackSearchRe = regexp.MustCompile("(?i)line 1")
+	width := model.scrollbackView.Width()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = model.scrollbackBuildDisplay(width)
 	}
 }
 

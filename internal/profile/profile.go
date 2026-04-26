@@ -284,7 +284,7 @@ func Load(path string) (Profile, error) {
 	}, nil
 }
 
-const defaultMaxBytes int64 = 1 << 20 // 1 MiB per panel
+const defaultMaxBytes int64 = 0 // 0 means unlimited
 
 func resolveScrollback(raw rawScrollback) (ScrollbackConfig, error) {
 	dir := raw.Dir
