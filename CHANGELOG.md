@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/rikvanderkemp/muxedo/compare/v0.1.18...v0.1.19) (2026-04-26)
+
+
+### Features
+
+* **ui:** simplify panel interactions ([#56](https://github.com/rikvanderkemp/muxedo/issues/56)) ([bc91020](https://github.com/rikvanderkemp/muxedo/commit/bc91020a5ab16609f178431425c6e97844daaf9a))
+
 ## [0.1.18](https://github.com/rikvanderkemp/muxedo/compare/v0.1.17...v0.1.18) (2026-04-25)
 
 
