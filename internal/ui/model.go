@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -23,6 +26,11 @@ import (
 type tickMsg time.Time
 
 type LogMsg string
+
+type scrollbackMarker struct {
+	AfterID uint64
+	At      time.Time
+}
 
 type StartupCompleteMsg struct {
 	panels []*process.Panel
@@ -101,28 +109,54 @@ func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
 }
 
 type Model struct {
-	panels           []*process.Panel
-	theme            Theme
-	width            int
-	height           int
-	grid             layout.Grid
-	activePanel      int
-	maximizedPanel   int
-	panelInsertMode  bool   // when a panel is focused: false = normal (vim-like), true = keys go to PTY
-	prevPanelRunning []bool // per-panel running state last tick; detects run→stop while focused
-	scrollOffsets    []int
-	scrollSelections []int
-	scrollMarks      []uint64
-	selections       []panelSelection
-	sendInput        func(*process.Panel, []byte) error
-	panelRunning     func(*process.Panel) bool
-	restartPanel     func(*process.Panel) error
-	historyLines     func(*process.Panel) []process.HistoryLine
-	displayForView   func(*process.Panel) process.DisplayState
-	copySelection    func(string) error
-	exiting          bool
-	exitStatuses     []string
-	exitCompleted    int
+	panels                          []*process.Panel
+	theme                           Theme
+	width                           int
+	height                          int
+	grid                            layout.Grid
+	activePanel                     int
+	maximizedPanel                  int
+	panelInsertMode                 bool   // when a panel is focused: false = normal (vim-like), true = keys go to PTY
+	prevPanelRunning                []bool // per-panel running state last tick; detects run→stop while focused
+	selections                      []panelSelection
+	scrollbackActive                bool
+	scrollbackPanel                 int
+	scrollbackView                  viewport.Model
+	scrollbackLines                 []process.HistoryLine
+	scrollbackShowLineNumbers       bool
+	scrollbackLineNumberPrefixWidth int
+	scrollbackRefreshedAt           time.Time
+	scrollbackCursorID              uint64
+	scrollbackCursorLine            int
+	scrollbackMarked                map[uint64]struct{}
+	scrollbackLastClickAt           time.Time
+	scrollbackLastClickLine         int
+	scrollbackRefreshMarkers        []scrollbackMarker
+	scrollbackDisplayToHistory      []int
+	scrollbackHistoryToDisplay      []int
+	scrollbackSearchActive          bool
+	scrollbackSearchQuery           string
+	scrollbackSearchLocked          string
+	scrollbackSearchErr             string
+	scrollbackSearchMatches         []int
+	scrollbackSearchIdx             int
+	// scrollbackSearchMatchHit is a dense []bool indexed by history line index.
+	// It replaces a map[int]struct{} to skip hashing in the per-row style hot
+	// path and to be reusable across keystrokes via clear().
+	scrollbackSearchMatchHit []bool
+	scrollbackSearchRe       *regexp.Regexp
+	// scrollbackDisplayBuf is the reusable backing slice for built display
+	// lines; amortized across search-typing recomputes.
+	scrollbackDisplayBuf []string
+	sendInput            func(*process.Panel, []byte) error
+	panelRunning         func(*process.Panel) bool
+	restartPanel         func(*process.Panel) error
+	historyLines         func(*process.Panel) []process.HistoryLine
+	displayForView       func(*process.Panel) process.DisplayState
+	copySelection        func(string) error
+	exiting              bool
+	exitStatuses         []string
+	exitCompleted        int
 
 	killingPanel    bool
 	killingPanelIdx int
@@ -130,6 +164,7 @@ type Model struct {
 
 	messageBuffer    []string
 	showBuffer       bool
+	helpActive       bool
 	title            string
 	startupCompleted bool
 	startupSpecs     []profile.StartupSpec
@@ -147,14 +182,18 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 	}
 
 	return Model{
-		panels:           panels,
-		theme:            theme,
-		grid:             layout.Compute(len(panels)),
-		activePanel:      -1,
-		maximizedPanel:   -1,
-		startupCompleted: true,
-		scrollbackConfig: profile.ScrollbackConfig{},
-		msgChan:          newMsgChan(),
+		panels:                    panels,
+		theme:                     theme,
+		grid:                      layout.Compute(len(panels)),
+		activePanel:               -1,
+		maximizedPanel:            -1,
+		scrollbackPanel:           -1,
+		scrollbackShowLineNumbers: true,
+		scrollbackCursorLine:      -1,
+		scrollbackLastClickLine:   -1,
+		startupCompleted:          true,
+		scrollbackConfig:          profile.ScrollbackConfig{},
+		msgChan:                   newMsgChan(),
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -179,17 +218,21 @@ func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []pro
 	s.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
 
 	return Model{
-		title:            title,
-		startupSpecs:     startup,
-		startupItems:     newStartupItems(startup),
-		startupSpinner:   s,
-		panelSpecs:       panels,
-		scrollbackConfig: sb,
-		theme:            theme,
-		msgChan:          newMsgChan(),
-		grid:             layout.Compute(len(panels)),
-		activePanel:      -1,
-		maximizedPanel:   -1,
+		title:                     title,
+		startupSpecs:              startup,
+		startupItems:              newStartupItems(startup),
+		startupSpinner:            s,
+		panelSpecs:                panels,
+		scrollbackConfig:          sb,
+		theme:                     theme,
+		msgChan:                   newMsgChan(),
+		grid:                      layout.Compute(len(panels)),
+		activePanel:               -1,
+		maximizedPanel:            -1,
+		scrollbackPanel:           -1,
+		scrollbackShowLineNumbers: true,
+		scrollbackCursorLine:      -1,
+		scrollbackLastClickLine:   -1,
 		sendInput: func(p *process.Panel, input []byte) error {
 			return p.WriteInput(input)
 		},
@@ -210,10 +253,12 @@ func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []pro
 }
 
 func (m Model) emitMsg(msg tea.Msg) bool {
+	t := time.NewTimer(msgSendTimeout)
+	defer t.Stop()
 	select {
 	case m.msgChan <- msg:
 		return true
-	case <-time.After(msgSendTimeout):
+	case <-t.C:
 		return false
 	}
 }
@@ -446,6 +491,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Help modal: toggle with `?`, close with `?` or `Esc`. Disabled in insert
+	// mode so insert keys still go to the PTY.
+	if k, ok := msg.(tea.KeyPressMsg); ok && !m.panelInsertMode {
+		if m.helpActive {
+			if isHelpToggleKey(k) || k.String() == "esc" {
+				m.helpActive = false
+				return m, nil
+			}
+			return m, nil
+		}
+		if isHelpToggleKey(k) {
+			m.helpActive = true
+			return m, nil
+		}
+	}
+
+	if m.scrollbackActive {
+		if next, cmd, handled := m.updateScrollback(msg); handled {
+			return next, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+b" {
@@ -457,10 +524,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activePanel >= 0 {
 				if m.panelInsertMode {
 					m.panelInsertMode = false
-					return m, nil
-				}
-				if m.activePanelScrolledBack() {
-					m.scrollActivePanelToLive()
 					return m, nil
 				}
 				if m.clearActiveSelection() {
@@ -521,9 +584,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.handleCopyKey(msg) {
 				return m, nil
 			}
-			if m.handleScrollKey(msg) {
-				return m, nil
-			}
 
 			if msg.Mod == 0 {
 				if runes := []rune(msg.Text); len(runes) == 1 {
@@ -533,6 +593,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.clearActiveSelection()
 							m.panelInsertMode = true
 						}
+						return m, nil
+					case 's', 'S':
+						m.enterScrollback()
 						return m, nil
 					case 'm', 'M':
 						m.toggleMaximized()
@@ -615,18 +678,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseWheelMsg:
-		if m.activePanel >= 0 {
-			if idx, ok := m.panelIndexAt(msg.X, msg.Y); ok && idx == m.activePanel {
-				switch msg.Button {
-				case tea.MouseWheelUp:
-					m.scrollViewportBy(-3)
-					return m, nil
-				case tea.MouseWheelDown:
-					m.scrollViewportBy(3)
-					return m, nil
-				}
-			}
-		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -723,6 +775,14 @@ func (m Model) View() tea.View {
 	}
 
 	gh := m.gridHeight()
+	if m.scrollbackActive {
+		body := m.renderScrollback()
+		if m.height > 1 {
+			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
+		}
+		return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapOverlays(body)))
+	}
+
 	if idx, ok := m.visibleMaximizedPanel(); ok {
 		p := m.panels[idx]
 		out := m.displayForView(p)
@@ -742,7 +802,7 @@ func (m Model) View() tea.View {
 		if m.height > 1 {
 			body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 		}
-		return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body)))
+		return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapOverlays(body)))
 	}
 
 	cell := layout.CellSizes(m.width, gh, m.grid.Rows, m.grid.Cols)
@@ -796,7 +856,18 @@ func (m Model) View() tea.View {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderStatusLine())
 	}
 
-	return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapExiting(body)))
+	return m.view(lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, m.wrapOverlays(body)))
+}
+
+func (m Model) renderScrollback() string {
+	title := "SCROLLBACK"
+	if m.scrollbackPanel >= 0 && m.scrollbackPanel < len(m.panels) {
+		title = formatPanelTitle(m.scrollbackPanel, m.panels[m.scrollbackPanel].Name) + " · SCROLLBACK"
+	}
+	if !m.scrollbackRefreshedAt.IsZero() {
+		title += " · refreshed " + m.scrollbackRefreshedAt.Format("2006-01-02 15:04:05")
+	}
+	return renderScrollbackPane(m.theme, title, m.scrollbackView.View(), m.width, m.gridHeight())
 }
 
 func interleave(items []string, sep string) []string {
@@ -811,6 +882,18 @@ func interleave(items []string, sep string) []string {
 		out = append(out, it)
 	}
 	return out
+}
+
+func (m Model) wrapOverlays(body string) string {
+	// Exiting/killing dialog always wins.
+	if m.exiting || m.killingPanel {
+		return m.wrapExiting(body)
+	}
+	if m.helpActive {
+		box := m.renderHelpDialog()
+		return floatOverlayCentered(body, box, m.width, m.height)
+	}
+	return body
 }
 
 func (m Model) wrapExiting(body string) string {
@@ -833,7 +916,99 @@ func (m Model) wrapExiting(body string) string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialogBox)
 }
 
+func isHelpToggleKey(msg tea.KeyPressMsg) bool {
+	return msg.Text == "?" || msg.String() == "?"
+}
+
+func (m Model) renderHelpDialog() string {
+	mode := m.statusModeLabel()
+	if m.scrollbackSearchActive {
+		mode = "SEARCH"
+	}
+
+	lines := []string{
+		"Help · " + mode,
+		"",
+		"Global (not in insert):",
+		"  ?        help (toggle)",
+		"  Esc      close help",
+		"  Ctrl-B   message buffer",
+		"",
+		"Normal / no-focus:",
+		"  click/1–9  focus panel",
+		"  hjkl      move focus",
+		"  I         insert mode",
+		"  S         scrollback",
+		"  M         maximize/restore",
+		"  R         reload focused panel",
+		"  X         stop focused panel",
+		"  Esc       blur / restore+blur",
+		"",
+		"Scrollback:",
+		"  /         search (regex, case-insensitive)",
+		"  n / N     next / prev match",
+		"  Y         yank matching lines",
+		"  M         yank matched substrings",
+		"  l         toggle line numbers",
+		"  r         refresh (insert marker)",
+		"  m         mark/unmark line",
+		"  j/k/↑/↓   cursor line",
+		"  g/G       top/bottom",
+		"  wheel/PgUp/PgDn  scroll",
+		"  click/drag select · y/Enter copy",
+	}
+
+	// Fit dialog inside terminal with margin; clamp to [20..84] x [8..28].
+	maxW := clamp(m.width-8, 20, 84)
+	maxH := clamp(m.height-6, 8, 28)
+	// Never exceed screen so borders aren't clipped.
+	maxW = min(maxW, max(1, m.width-2))
+	maxH = min(maxH, max(1, m.height-2))
+
+	// Trim to height budget.
+	if len(lines) > maxH {
+		lines = lines[:maxH-1]
+		lines = append(lines, "  …")
+	}
+
+	// Content width: account for border (2) + padding L/R (2+2).
+	innerW := maxW - 6
+	if innerW < 1 {
+		innerW = 1
+	}
+	for i := range lines {
+		lines[i] = ansi.Truncate(lines[i], innerW, "")
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.theme.color(m.theme.ActiveNormalTitleFG)).
+		Background(m.theme.color(m.theme.ActiveNormalTitleBG)).
+		Padding(0, 1)
+	bodyStyle := lipgloss.NewStyle().Foreground(m.theme.color(m.theme.StatusBarFG))
+
+	if len(lines) > 0 {
+		tw := innerW - 2
+		if tw < 0 {
+			tw = 0
+		}
+		lines[0] = titleStyle.Render(" " + ansi.Truncate(lines[0], tw, "") + " ")
+	}
+	content := bodyStyle.Render(strings.Join(lines, "\n"))
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.theme.color(m.theme.ActiveNormalBorder)).
+		Background(m.theme.color(m.theme.StatusBarBG)).
+		Padding(1, 2).
+		Width(maxW).
+		MaxWidth(maxW).
+		Render(content)
+}
+
 func (m Model) statusModeLabel() string {
+	if m.scrollbackActive {
+		return "SCROLLBACK"
+	}
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
 		return "NONE"
 	}
@@ -845,14 +1020,24 @@ func (m Model) statusModeLabel() string {
 
 func (m Model) statusHint() string {
 	if !m.startupCompleted {
-		return "STARTING... · Startup status and logs"
+		return "STARTING... · ?: help · Ctrl-B buffer"
 	}
 	if m.showBuffer {
-		return "BUFFER: Ctrl-B toggle back · Startup status and logs"
+		return "BUFFER: Ctrl-B back · ?: help · Esc close"
+	}
+
+	if m.scrollbackActive {
+		if m.scrollbackSearchActive {
+			if m.scrollbackSearchErr != "" {
+				return "?: help · SEARCH: " + m.scrollbackSearchQuery + " (invalid regex: " + m.scrollbackSearchErr + ") · Enter confirm · Esc cancel"
+			}
+			return "?: help · SEARCH: " + m.scrollbackSearchQuery + " · Enter confirm · Esc cancel"
+		}
+		return "?: help · SCROLLBACK: / search · r refresh · l lines · m mark · y/Enter copy · Esc close"
 	}
 
 	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return "No active: click/1–9 focus · Ctrl-B buffer · Ctrl-C quit"
+		return "?: help · No active: click/1–9 focus · Ctrl-B buffer · Ctrl-C quit"
 	}
 
 	p := m.panels[m.activePanel]
@@ -863,17 +1048,12 @@ func (m Model) statusHint() string {
 		maximizeAction = "M restore"
 		escapeAction = "Esc restore+blur"
 	}
-	scrollAction := "PgUp/PgDn wheel scroll"
-	if m.activePanelScrolledBack() {
-		scrollAction = "PgDn/G live"
-		escapeAction = "Esc live"
-	}
 	if !m.panelRunning(p) {
-		parts = append(parts, "STOPPED-NORMAL: "+scrollAction, "drag select", "Y/Enter copy", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
+		parts = append(parts, "?: help", "STOPPED: S scrollback", "drag select", "y/Enter copy", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", escapeAction)
 	} else if m.panelInsertMode {
 		parts = append(parts, "INSERT: Esc normal")
 	} else {
-		parts = append(parts, "NORMAL: I insert", scrollAction, "drag select", "Y/Enter copy", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", "Ctrl-B buffer", escapeAction)
+		parts = append(parts, "?: help", "NORMAL: I insert", "S scrollback", "drag select", "y/Enter copy", "1–9 hjkl panes", maximizeAction, "R reload", "X stop", "Ctrl-B buffer", escapeAction)
 	}
 
 	parts = append(parts, "README")
@@ -902,6 +1082,924 @@ func (m *Model) resizePanels() {
 	}
 	for _, p := range m.panels {
 		p.Resize(innerW, innerH)
+	}
+}
+
+func (m *Model) enterScrollback() {
+	if m.activePanel < 0 || m.activePanel >= len(m.panels) || m.panelInsertMode {
+		return
+	}
+	m.ensureScrollState()
+	m.clearActiveSelection()
+
+	idx := m.activePanel
+	m.scrollbackActive = true
+	m.scrollbackPanel = idx
+	m.scrollbackLines = append([]process.HistoryLine(nil), m.historyLines(m.panels[idx])...)
+	m.scrollbackRefreshedAt = time.Now()
+	if len(m.scrollbackLines) > 0 {
+		m.scrollbackCursorLine = len(m.scrollbackLines) - 1
+		m.scrollbackCursorID = m.scrollbackLines[m.scrollbackCursorLine].ID
+	} else {
+		m.scrollbackCursorLine = -1
+		m.scrollbackCursorID = 0
+	}
+
+	width, height := m.scrollbackViewportSize()
+	vp := viewport.New(viewport.WithWidth(width), viewport.WithHeight(height))
+	vp.FillHeight = true
+	vp.SoftWrap = false
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 3
+	displayLines, prefixWidth := m.scrollbackBuildDisplay(vp.Width())
+	vp.SetContentLines(displayLines)
+	vp.GotoBottom()
+	m.scrollbackView = vp
+	m.scrollbackLineNumberPrefixWidth = prefixWidth
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m *Model) exitScrollback() {
+	if !m.scrollbackActive {
+		return
+	}
+	if m.scrollbackPanel >= 0 && m.scrollbackPanel < len(m.selections) {
+		m.selections[m.scrollbackPanel] = panelSelection{}
+	}
+	m.scrollbackActive = false
+	m.scrollbackPanel = -1
+	m.scrollbackLines = nil
+	m.scrollbackView = viewport.Model{}
+	m.scrollbackLineNumberPrefixWidth = 0
+	m.scrollbackRefreshedAt = time.Time{}
+	m.scrollbackCursorLine = -1
+	m.scrollbackCursorID = 0
+	m.scrollbackLastClickAt = time.Time{}
+	m.scrollbackLastClickLine = -1
+	m.scrollbackRefreshMarkers = nil
+	m.scrollbackDisplayToHistory = nil
+	m.scrollbackHistoryToDisplay = nil
+	m.scrollbackSearchActive = false
+	m.scrollbackSearchQuery = ""
+	m.scrollbackSearchLocked = ""
+	m.scrollbackSearchErr = ""
+	m.scrollbackSearchMatches = nil
+	m.scrollbackSearchIdx = -1
+	m.scrollbackSearchMatchHit = m.scrollbackSearchMatchHit[:0]
+	m.scrollbackSearchRe = nil
+	m.panelInsertMode = false
+	m.helpActive = false
+}
+
+func (m *Model) setScrollbackCursorLine(line int) {
+	if !m.scrollbackActive || len(m.scrollbackLines) == 0 {
+		m.scrollbackCursorLine = -1
+		m.scrollbackCursorID = 0
+		return
+	}
+	line = clamp(line, 0, len(m.scrollbackLines)-1)
+	m.scrollbackCursorLine = line
+	m.scrollbackCursorID = m.scrollbackLines[line].ID
+	// Keep a one-line selection as the "cursor highlight".
+	if m.scrollbackPanel >= 0 && m.scrollbackPanel < len(m.selections) {
+		// Use a very large EndCol so copy (`y`/Enter) grabs full line.
+		m.selections[m.scrollbackPanel] = panelSelection{
+			Active:   true,
+			Dragging: false,
+			Source:   selectSourceHistory,
+			StartRow: line,
+			StartCol: 0,
+			EndRow:   line,
+			EndCol:   1 << 30,
+		}
+	}
+	displayLine := line
+	if line >= 0 && line < len(m.scrollbackHistoryToDisplay) && m.scrollbackHistoryToDisplay[line] >= 0 {
+		displayLine = m.scrollbackHistoryToDisplay[line]
+	}
+	m.scrollbackView.EnsureVisible(displayLine, 0, 0)
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m *Model) refreshScrollbackView() {
+	if !m.scrollbackActive || m.scrollbackPanel < 0 || m.scrollbackPanel >= len(m.panels) {
+		return
+	}
+	prevAfterID := uint64(0)
+	if len(m.scrollbackLines) > 0 {
+		prevAfterID = m.scrollbackLines[len(m.scrollbackLines)-1].ID
+	}
+	cursorID := m.scrollbackCursorID
+	m.scrollbackLines = append([]process.HistoryLine(nil), m.historyLines(m.panels[m.scrollbackPanel])...)
+	m.scrollbackRefreshedAt = time.Now()
+
+	m.scrollbackRefreshMarkers = append(m.scrollbackRefreshMarkers, scrollbackMarker{
+		AfterID: prevAfterID,
+		At:      m.scrollbackRefreshedAt,
+	})
+
+	m.scrollbackCursorLine = -1
+	if cursorID != 0 {
+		for i := range m.scrollbackLines {
+			if m.scrollbackLines[i].ID == cursorID {
+				m.scrollbackCursorLine = i
+				break
+			}
+		}
+	}
+	if m.scrollbackCursorLine >= 0 {
+		m.scrollbackCursorID = cursorID
+	} else if len(m.scrollbackLines) > 0 {
+		m.scrollbackCursorLine = len(m.scrollbackLines) - 1
+		m.scrollbackCursorID = m.scrollbackLines[m.scrollbackCursorLine].ID
+	} else {
+		m.scrollbackCursorID = 0
+	}
+	yoff := m.scrollbackView.YOffset()
+	xoff := m.scrollbackView.XOffset()
+	displayLines, prefixWidth := m.scrollbackBuildDisplay(m.scrollbackView.Width())
+	m.scrollbackView.SetContentLines(displayLines)
+	m.scrollbackView.SetYOffset(yoff)
+	m.scrollbackView.SetXOffset(xoff)
+	m.scrollbackLineNumberPrefixWidth = prefixWidth
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m *Model) scrollbackSearchRecompute(liveJump bool) {
+	q := m.scrollbackSearchQuery
+	if q == "" {
+		m.scrollbackSearchErr = ""
+		m.scrollbackSearchMatchHit = m.scrollbackSearchMatchHit[:0]
+		m.scrollbackSearchMatches = m.scrollbackSearchMatches[:0]
+		m.scrollbackSearchIdx = -1
+		m.scrollbackSearchRe = nil
+		return
+	}
+	re, err := regexp.Compile("(?i)" + q)
+	if err != nil {
+		// Preserve last valid matches/highlights so the user keeps context while
+		// editing an in-progress regex (e.g. typing "(" before closing paren).
+		m.scrollbackSearchErr = err.Error()
+		return
+	}
+	m.scrollbackSearchErr = ""
+	m.scrollbackSearchMatches = m.scrollbackSearchMatches[:0]
+	m.scrollbackSearchIdx = -1
+	m.scrollbackSearchRe = re
+
+	for i := range m.scrollbackLines {
+		if re.MatchString(m.scrollbackLines[i].Text) {
+			m.scrollbackSearchMatches = append(m.scrollbackSearchMatches, i)
+		}
+	}
+
+	// Resize+clear the hit slice in place to avoid per-keystroke map allocations.
+	n := len(m.scrollbackLines)
+	if cap(m.scrollbackSearchMatchHit) < n {
+		m.scrollbackSearchMatchHit = make([]bool, n)
+	} else {
+		m.scrollbackSearchMatchHit = m.scrollbackSearchMatchHit[:n]
+		clear(m.scrollbackSearchMatchHit)
+	}
+	for _, hi := range m.scrollbackSearchMatches {
+		if hi >= 0 && hi < n {
+			m.scrollbackSearchMatchHit[hi] = true
+		}
+	}
+
+	if len(m.scrollbackSearchMatches) == 0 {
+		return
+	}
+
+	start := m.scrollbackCursorLine
+	if start < 0 {
+		start = 0
+	}
+	best := 0
+	for k := range m.scrollbackSearchMatches {
+		if m.scrollbackSearchMatches[k] >= start {
+			best = k
+			break
+		}
+	}
+	m.scrollbackSearchIdx = best
+
+	if liveJump {
+		m.scrollbackSearchJumpToIdx(best)
+	}
+}
+
+func (m *Model) scrollbackSearchJumpToIdx(idx int) {
+	if idx < 0 || idx >= len(m.scrollbackSearchMatches) {
+		return
+	}
+	hi := m.scrollbackSearchMatches[idx]
+	if hi < 0 || hi >= len(m.scrollbackLines) {
+		return
+	}
+	// Jump to display row for history line.
+	displayRow := hi
+	if hi < len(m.scrollbackHistoryToDisplay) && m.scrollbackHistoryToDisplay[hi] >= 0 {
+		displayRow = m.scrollbackHistoryToDisplay[hi]
+	}
+	m.scrollbackView.EnsureVisible(displayRow, 0, 0)
+	m.setScrollbackCursorLine(hi)
+}
+
+func (m *Model) scrollbackRebuildDisplayPreserveOffsets() {
+	yoff := m.scrollbackView.YOffset()
+	xoff := m.scrollbackView.XOffset()
+	displayLines, prefixWidth := m.scrollbackBuildDisplay(m.scrollbackView.Width())
+	m.scrollbackView.SetContentLines(displayLines)
+	m.scrollbackView.SetYOffset(yoff)
+	m.scrollbackView.SetXOffset(xoff)
+	m.scrollbackLineNumberPrefixWidth = prefixWidth
+}
+
+// toggleScrollbackMark toggles a bookmark for the given history line ID and
+// rebuilds the display preserving offsets. No-op when id is zero.
+func (m *Model) toggleScrollbackMark(id uint64) {
+	if id == 0 {
+		return
+	}
+	if m.scrollbackMarked == nil {
+		m.scrollbackMarked = make(map[uint64]struct{}, 8)
+	}
+	if _, ok := m.scrollbackMarked[id]; ok {
+		delete(m.scrollbackMarked, id)
+	} else {
+		m.scrollbackMarked[id] = struct{}{}
+	}
+	m.scrollbackRebuildDisplayPreserveOffsets()
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m *Model) scrollbackCopyAllSearchMatches() {
+	if !m.scrollbackActive {
+		return
+	}
+	if len(m.scrollbackSearchMatches) == 0 {
+		m.messageBuffer = append(m.messageBuffer, "warning: no search matches to copy")
+		return
+	}
+	lines := make([]string, 0, len(m.scrollbackSearchMatches))
+	for _, hi := range m.scrollbackSearchMatches {
+		if hi < 0 || hi >= len(m.scrollbackLines) {
+			continue
+		}
+		text := strings.TrimRight(m.scrollbackLines[hi].Text, " ")
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d: %s", hi+1, text))
+	}
+	if len(lines) == 0 {
+		m.messageBuffer = append(m.messageBuffer, "warning: no non-empty search matches to copy")
+		return
+	}
+	out := strings.Join(lines, "\n")
+	if err := m.copySelection(out); err != nil {
+		m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: copying search matches: %v", err))
+		return
+	}
+	m.messageBuffer = append(m.messageBuffer, "Copied search matches to clipboard.")
+}
+
+func (m *Model) scrollbackCopySearchMatchSubstrings() {
+	if !m.scrollbackActive {
+		return
+	}
+	if m.scrollbackSearchRe == nil || len(m.scrollbackSearchMatches) == 0 {
+		m.messageBuffer = append(m.messageBuffer, "warning: no search matches to copy")
+		return
+	}
+	out := make([]string, 0, len(m.scrollbackSearchMatches))
+	for _, hi := range m.scrollbackSearchMatches {
+		if hi < 0 || hi >= len(m.scrollbackLines) {
+			continue
+		}
+		raw := m.scrollbackLines[hi].Text
+		locs := m.scrollbackSearchRe.FindAllStringIndex(raw, -1)
+		for _, loc := range locs {
+			if len(loc) != 2 {
+				continue
+			}
+			start, end := loc[0], loc[1]
+			if start < 0 || end < 0 || start >= end || start > len(raw) || end > len(raw) {
+				continue
+			}
+			match := raw[start:end]
+			if match == "" {
+				continue
+			}
+			out = append(out, match)
+		}
+	}
+	if len(out) == 0 {
+		m.messageBuffer = append(m.messageBuffer, "warning: no search matches to copy")
+		return
+	}
+	text := strings.Join(out, "\n")
+	if err := m.copySelection(text); err != nil {
+		m.messageBuffer = append(m.messageBuffer, fmt.Sprintf("error: copying search matches: %v", err))
+		return
+	}
+	m.messageBuffer = append(m.messageBuffer, "Copied search matches to clipboard.")
+}
+
+func (m *Model) updateScrollback(msg tea.Msg) (Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		if msg.String() == "esc" {
+			if m.scrollbackSearchActive {
+				m.scrollbackSearchActive = false
+				m.scrollbackSearchQuery = ""
+				m.scrollbackSearchErr = ""
+				return *m, nil, true
+			}
+			m.exitScrollback()
+			return *m, nil, true
+		}
+		if m.scrollbackSearchActive {
+			switch msg.String() {
+			case "enter":
+				m.scrollbackSearchLocked = m.scrollbackSearchQuery
+				m.scrollbackSearchActive = false
+				// Confirmed: jump to best match if valid.
+				if m.scrollbackSearchErr == "" && m.scrollbackSearchIdx >= 0 {
+					m.scrollbackSearchJumpToIdx(m.scrollbackSearchIdx)
+				}
+				m.scrollbackRebuildDisplayPreserveOffsets()
+				m.updateScrollbackSelectionStyle()
+				return *m, nil, true
+			case "backspace":
+				if m.scrollbackSearchQuery != "" {
+					rs := []rune(m.scrollbackSearchQuery)
+					m.scrollbackSearchQuery = string(rs[:len(rs)-1])
+					m.scrollbackSearchRecompute(true)
+					m.scrollbackRebuildDisplayPreserveOffsets()
+					m.updateScrollbackSelectionStyle()
+				}
+				return *m, nil, true
+			}
+			// Accept any printable single rune, including shifted ones (uppercase
+			// letters, regex metachars like ?, |, ^, $). Reject control-modifier
+			// combos so Ctrl+L etc. don't end up in the query.
+			if !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) && !msg.Mod.Contains(tea.ModSuper) {
+				if runes := []rune(msg.Text); len(runes) == 1 {
+					m.scrollbackSearchQuery += msg.Text
+					m.scrollbackSearchRecompute(true)
+					m.scrollbackRebuildDisplayPreserveOffsets()
+					m.updateScrollbackSelectionStyle()
+					return *m, nil, true
+				}
+			}
+			return *m, nil, true
+		}
+		// Prefer yank-matches over selection copy. Some terminals send shift+y as
+		// Text=\"y\" with ModShift, others as Text=\"Y\".
+		if msg.Text == "Y" || (msg.Text == "y" && msg.Mod.Contains(tea.ModShift)) || msg.String() == "Y" {
+			m.scrollbackCopyAllSearchMatches()
+			return *m, nil, true
+		}
+		// Copy match substrings (grep-like results). Handle shift+m variance.
+		if msg.Text == "M" || (msg.Text == "m" && msg.Mod.Contains(tea.ModShift)) || msg.String() == "M" {
+			m.scrollbackCopySearchMatchSubstrings()
+			return *m, nil, true
+		}
+		if m.handleCopyKey(msg) {
+			return *m, nil, true
+		}
+		switch msg.String() {
+		case "up":
+			if m.scrollbackCursorLine < 0 {
+				m.setScrollbackCursorLine(0)
+			} else {
+				m.setScrollbackCursorLine(m.scrollbackCursorLine - 1)
+			}
+			return *m, nil, true
+		case "down":
+			if m.scrollbackCursorLine < 0 {
+				m.setScrollbackCursorLine(0)
+			} else {
+				m.setScrollbackCursorLine(m.scrollbackCursorLine + 1)
+			}
+			return *m, nil, true
+		}
+		if msg.Mod == 0 {
+			if runes := []rune(msg.Text); len(runes) == 1 {
+				switch runes[0] {
+				case '/':
+					m.scrollbackSearchActive = true
+					m.scrollbackSearchQuery = ""
+					m.scrollbackSearchErr = ""
+					m.scrollbackSearchRe = nil
+					return *m, nil, true
+				case 'n':
+					if len(m.scrollbackSearchMatches) > 0 {
+						if m.scrollbackSearchIdx < 0 {
+							m.scrollbackSearchIdx = 0
+						} else {
+							m.scrollbackSearchIdx = (m.scrollbackSearchIdx + 1) % len(m.scrollbackSearchMatches)
+						}
+						m.scrollbackSearchJumpToIdx(m.scrollbackSearchIdx)
+						m.updateScrollbackSelectionStyle()
+					}
+					return *m, nil, true
+				case 'N':
+					if len(m.scrollbackSearchMatches) > 0 {
+						if m.scrollbackSearchIdx < 0 {
+							m.scrollbackSearchIdx = 0
+						} else {
+							m.scrollbackSearchIdx--
+							if m.scrollbackSearchIdx < 0 {
+								m.scrollbackSearchIdx = len(m.scrollbackSearchMatches) - 1
+							}
+						}
+						m.scrollbackSearchJumpToIdx(m.scrollbackSearchIdx)
+						m.updateScrollbackSelectionStyle()
+					}
+					return *m, nil, true
+				case 'm':
+					if m.scrollbackCursorLine >= 0 && m.scrollbackCursorLine < len(m.scrollbackLines) {
+						m.toggleScrollbackMark(m.scrollbackLines[m.scrollbackCursorLine].ID)
+					}
+					return *m, nil, true
+				case 'r':
+					m.refreshScrollbackView()
+					return *m, nil, true
+				case 'l':
+					m.scrollbackShowLineNumbers = !m.scrollbackShowLineNumbers
+					m.scrollbackRebuildDisplayPreserveOffsets()
+					m.updateScrollbackSelectionStyle()
+					return *m, nil, true
+				case 'g':
+					m.scrollbackView.GotoTop()
+					return *m, nil, true
+				case 'G':
+					m.scrollbackView.GotoBottom()
+					return *m, nil, true
+				}
+			}
+		}
+		var cmd tea.Cmd
+		m.scrollbackView, cmd = m.scrollbackView.Update(msg)
+		return *m, cmd, true
+	case tea.MouseWheelMsg:
+		var cmd tea.Cmd
+		m.scrollbackView, cmd = m.scrollbackView.Update(msg)
+		return *m, cmd, true
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			if row, col, ok := m.scrollbackContentPoint(msg.X, msg.Y); ok {
+				line, ok := m.scrollbackHistoryLineAt(row)
+				if !ok {
+					return *m, nil, true
+				}
+				if len(m.scrollbackLines) > 0 {
+					m.scrollbackCursorLine = line
+					m.scrollbackCursorID = m.scrollbackLines[line].ID
+				}
+				// Double click: toggle mark on the clicked line.
+				if m.scrollbackLastClickLine == line && !m.scrollbackLastClickAt.IsZero() && time.Since(m.scrollbackLastClickAt) < 350*time.Millisecond {
+					m.scrollbackLastClickAt = time.Time{}
+					m.scrollbackLastClickLine = -1
+					m.setScrollbackCursorLine(line)
+					m.toggleScrollbackMark(m.scrollbackCursorID)
+					return *m, nil, true
+				}
+				m.scrollbackLastClickAt = time.Now()
+				m.scrollbackLastClickLine = line
+				// Second click on same single-line selection clears highlight (mark stays).
+				if m.scrollbackPanel >= 0 && m.scrollbackPanel < len(m.selections) {
+					sel := m.selections[m.scrollbackPanel]
+					if sel.Source == selectSourceHistory && sel.Active && !sel.Dragging &&
+						sel.StartRow == line && sel.EndRow == line {
+						m.selections[m.scrollbackPanel] = panelSelection{}
+						m.updateScrollbackSelectionStyle()
+						return *m, nil, true
+					}
+				}
+
+				m.setScrollbackCursorLine(line)
+				m.beginScrollbackSelection(row, col)
+				return *m, nil, true
+			}
+		}
+		return *m, nil, true
+	case tea.MouseMotionMsg:
+		if msg.Button == tea.MouseLeft {
+			if row, col, ok := m.scrollbackContentPoint(msg.X, msg.Y); ok {
+				m.updateScrollbackSelection(row, col)
+				return *m, nil, true
+			}
+		}
+		return *m, nil, true
+	case tea.MouseReleaseMsg:
+		if msg.Button == tea.MouseLeft {
+			if row, col, ok := m.scrollbackContentPoint(msg.X, msg.Y); ok {
+				m.finishScrollbackSelection(row, col)
+				return *m, nil, true
+			}
+		}
+		return *m, nil, true
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.resizePanels()
+		m.resizeScrollbackViewport()
+		return *m, tea.ClearScreen, true
+	}
+	return *m, nil, false
+}
+
+func (m *Model) resizeScrollbackViewport() {
+	if !m.scrollbackActive {
+		return
+	}
+	offset := m.scrollbackView.YOffset()
+	xoff := m.scrollbackView.XOffset()
+	width, height := m.scrollbackViewportSize()
+	m.scrollbackView.SetWidth(width)
+	m.scrollbackView.SetHeight(height)
+	displayLines, prefixWidth := m.scrollbackBuildDisplay(m.scrollbackView.Width())
+	m.scrollbackView.SetContentLines(displayLines)
+	m.scrollbackView.SetYOffset(offset)
+	m.scrollbackView.SetXOffset(xoff)
+	m.scrollbackLineNumberPrefixWidth = prefixWidth
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m Model) scrollbackHistoryLineAt(viewportRow int) (int, bool) {
+	if !m.scrollbackActive || len(m.scrollbackLines) == 0 {
+		return -1, false
+	}
+	absRow := m.scrollbackView.YOffset() + viewportRow
+	if absRow < 0 || absRow >= len(m.scrollbackDisplayToHistory) {
+		return -1, false
+	}
+	h := m.scrollbackDisplayToHistory[absRow]
+	if h < 0 || h >= len(m.scrollbackLines) {
+		return -1, false
+	}
+	return h, true
+}
+
+func (m *Model) scrollbackBuildDisplay(viewportWidth int) ([]string, int) {
+	// Cache the highlight ANSI envelope (open/close) once per build instead of
+	// invoking lipgloss.Style.Render per match. style.Render allocates a fresh
+	// ANSI-wrapped string on every call; the envelope is identical across rows
+	// so we extract it once with a sentinel and write the open/close directly.
+	var hlOpen, hlClose string
+	if m.scrollbackSearchRe != nil {
+		highlightStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(m.theme.color(m.theme.OverlayFG)).
+			Background(m.theme.color(m.theme.StatusActivePanelBG))
+		const sentinel = "\x00"
+		rendered := highlightStyle.Render(sentinel)
+		if i := strings.Index(rendered, sentinel); i >= 0 {
+			hlOpen = rendered[:i]
+			hlClose = rendered[i+len(sentinel):]
+		}
+	}
+
+	var displayLines []string
+	var prefixWidth int
+	if len(m.scrollbackLines) > 0 {
+		// Reuse the backing slice across calls; per-keystroke search recompute
+		// would otherwise allocate a fresh []string of N entries every time.
+		n := len(m.scrollbackLines)
+		if cap(m.scrollbackDisplayBuf) < n {
+			m.scrollbackDisplayBuf = make([]string, n)
+		} else {
+			m.scrollbackDisplayBuf = m.scrollbackDisplayBuf[:n]
+		}
+		displayLines = m.scrollbackDisplayBuf
+
+		if !m.scrollbackShowLineNumbers {
+			for i := range m.scrollbackLines {
+				displayLines[i] = highlightMatches(m.scrollbackLines[i].Text, m.scrollbackSearchRe, hlOpen, hlClose)
+			}
+		} else {
+			digits := len(strconv.Itoa(len(m.scrollbackLines)))
+			prefixWidth = digits + 5
+			var b strings.Builder
+			for i, line := range m.scrollbackLines {
+				mark := " "
+				if m.scrollbackMarked != nil {
+					if _, ok := m.scrollbackMarked[line.ID]; ok {
+						mark = "●"
+					}
+				}
+				txt := highlightMatches(line.Text, m.scrollbackSearchRe, hlOpen, hlClose)
+				// Hand-rolled formatting: avoids fmt parse cost in the per-row
+				// hot path; benchmarked materially cheaper than fmt.Sprintf.
+				num := strconv.Itoa(i + 1)
+				b.Reset()
+				b.Grow(prefixWidth + len(txt))
+				for k := digits - len(num); k > 0; k-- {
+					b.WriteByte(' ')
+				}
+				b.WriteString(num)
+				b.WriteString(" │ ")
+				b.WriteString(mark)
+				b.WriteByte(' ')
+				b.WriteString(txt)
+				displayLines[i] = b.String()
+			}
+		}
+	}
+
+	m.scrollbackDisplayToHistory = make([]int, 0, len(displayLines)+len(m.scrollbackRefreshMarkers))
+	m.scrollbackHistoryToDisplay = make([]int, len(m.scrollbackLines))
+	for i := range m.scrollbackHistoryToDisplay {
+		m.scrollbackHistoryToDisplay[i] = -1
+	}
+
+	// Fast path: no refresh markers at all. Skip building the AfterID->times
+	// map entirely (saves an alloc per recompute for sessions that never
+	// pressed `r`). nil maps are safe to read; we just never enter the
+	// per-line marker check below.
+	var after map[uint64][]time.Time
+	if len(m.scrollbackRefreshMarkers) > 0 {
+		after = make(map[uint64][]time.Time, len(m.scrollbackRefreshMarkers))
+		for _, mk := range m.scrollbackRefreshMarkers {
+			after[mk.AfterID] = append(after[mk.AfterID], mk.At)
+		}
+	}
+
+	prefix := ""
+	if m.scrollbackShowLineNumbers && prefixWidth > 0 {
+		prefix = strings.Repeat(" ", prefixWidth)
+	}
+	innerW := viewportWidth
+	if innerW < 1 {
+		innerW = 1
+	}
+	if m.scrollbackShowLineNumbers {
+		innerW -= prefixWidth
+		if innerW < 1 {
+			innerW = 1
+		}
+	}
+
+	appendMarkers := func(out []string, times []time.Time) []string {
+		for _, at := range times {
+			out = append(out, m.buildRefreshMarkerLine(at, prefix, innerW))
+			m.scrollbackDisplayToHistory = append(m.scrollbackDisplayToHistory, -1)
+		}
+		return out
+	}
+
+	if len(displayLines) == 0 {
+		if times, ok := after[0]; ok {
+			out := make([]string, 0, len(times))
+			out = appendMarkers(out, times)
+			return out, prefixWidth
+		}
+		m.scrollbackDisplayToHistory = nil
+		m.scrollbackHistoryToDisplay = nil
+		return nil, prefixWidth
+	}
+
+	out := make([]string, 0, len(displayLines)+len(m.scrollbackRefreshMarkers))
+	if times, ok := after[0]; ok {
+		out = appendMarkers(out, times)
+	}
+	for hi := range m.scrollbackLines {
+		m.scrollbackHistoryToDisplay[hi] = len(out)
+		out = append(out, displayLines[hi])
+		m.scrollbackDisplayToHistory = append(m.scrollbackDisplayToHistory, hi)
+		if after != nil {
+			if times, ok := after[m.scrollbackLines[hi].ID]; ok {
+				out = appendMarkers(out, times)
+			}
+		}
+	}
+	return out, prefixWidth
+}
+
+// buildRefreshMarkerLine renders a single full-width refresh marker rule with
+// a centered timestamp label, prefixed by `prefix` (which aligns under the
+// line-number gutter when enabled).
+func (m *Model) buildRefreshMarkerLine(at time.Time, prefix string, innerW int) string {
+	label := "refreshed at " + at.Format("2006-01-02 15:04:05")
+	need := ansi.StringWidth(label) + 2
+	if need > innerW {
+		label = ansi.Truncate(label, max(0, innerW-2), "")
+		need = ansi.StringWidth(label) + 2
+	}
+	ruleW := innerW - need
+	leftW := ruleW / 2
+	rightW := ruleW - leftW
+	rule := strings.Repeat("─", leftW) + " " + label + " " + strings.Repeat("─", rightW)
+	rule = padOrTruncate(rule, innerW)
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.theme.color(m.theme.StatusHintFG)).
+		Render(prefix + rule)
+}
+
+func (m Model) scrollbackViewportSize() (int, int) {
+	width := m.width - 2
+	if width < 1 {
+		width = 1
+	}
+	height := m.gridHeight() - 3
+	if height < 1 {
+		height = 1
+	}
+	return width, height
+}
+
+// highlightMatches wraps regex matches in `s` with the precomputed ANSI envelope
+// (open/close). Reusing a single envelope across rows avoids repeated
+// lipgloss.Style.Render allocations in the per-keystroke search hot path.
+func highlightMatches(s string, re *regexp.Regexp, open, close string) string {
+	if re == nil || s == "" {
+		return s
+	}
+	locs := re.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + len(locs)*(len(open)+len(close)))
+	last := 0
+	for _, loc := range locs {
+		if len(loc) != 2 {
+			continue
+		}
+		start, end := loc[0], loc[1]
+		if start < last {
+			continue
+		}
+		if start > len(s) || end > len(s) || start >= end {
+			continue
+		}
+		b.WriteString(s[last:start])
+		b.WriteString(open)
+		b.WriteString(s[start:end])
+		b.WriteString(close)
+		last = end
+	}
+	if last < len(s) {
+		b.WriteString(s[last:])
+	}
+	return b.String()
+}
+
+func (m Model) scrollbackContentPoint(x, y int) (row, col int, ok bool) {
+	if !m.scrollbackActive || x < 1 || y < 2 {
+		return 0, 0, false
+	}
+	width := max(1, m.scrollbackView.Width())
+	height := max(1, m.scrollbackView.Height())
+	if x >= 1+width || y >= 2+height {
+		return 0, 0, false
+	}
+	displayCol := m.scrollbackView.XOffset() + x - 1
+	if m.scrollbackShowLineNumbers {
+		displayCol -= m.scrollbackLineNumberPrefixWidth
+		if displayCol < 0 {
+			displayCol = 0
+		}
+	}
+	return y - 2, displayCol, true
+}
+
+func (m *Model) beginScrollbackSelection(row, col int) {
+	// Click starts an active selection so highlight appears immediately.
+	m.setScrollbackSelection(row, col, true)
+}
+
+func (m *Model) updateScrollbackSelection(row, col int) {
+	m.setScrollbackSelection(row, col, true)
+}
+
+func (m *Model) finishScrollbackSelection(row, col int) {
+	if m.scrollbackPanel < 0 || m.scrollbackPanel >= len(m.selections) {
+		return
+	}
+	sel := m.selections[m.scrollbackPanel]
+	if sel.Dragging && sel.Active {
+		m.setScrollbackSelection(row, col, true)
+		sel = m.selections[m.scrollbackPanel]
+	}
+	if !sel.Active {
+		m.selections[m.scrollbackPanel] = panelSelection{}
+		m.updateScrollbackSelectionStyle()
+		return
+	}
+	sel.Dragging = false
+	m.selections[m.scrollbackPanel] = sel
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m *Model) setScrollbackSelection(row, col int, active bool) {
+	if !m.scrollbackActive || m.scrollbackPanel < 0 || m.scrollbackPanel >= len(m.panels) {
+		return
+	}
+	m.ensureScrollState()
+	if len(m.scrollbackLines) == 0 {
+		return
+	}
+	line, ok := m.scrollbackHistoryLineAt(row)
+	if !ok {
+		return
+	}
+	col = max(0, col)
+
+	idx := m.scrollbackPanel
+	sel := m.selections[idx]
+	if !sel.Dragging || sel.Source != selectSourceHistory {
+		sel = panelSelection{
+			Dragging: true,
+			Source:   selectSourceHistory,
+			StartRow: line,
+			StartCol: col,
+			EndRow:   line,
+			EndCol:   col,
+		}
+	} else {
+		sel.EndRow = line
+		sel.EndCol = col
+	}
+	sel.Active = active
+	m.selections[idx] = sel
+	m.updateScrollbackSelectionStyle()
+}
+
+func (m *Model) updateScrollbackSelectionStyle() {
+	if !m.scrollbackActive || m.scrollbackPanel < 0 || m.scrollbackPanel >= len(m.selections) {
+		return
+	}
+	sel := m.selections[m.scrollbackPanel]
+	if len(m.scrollbackLines) == 0 {
+		m.scrollbackView.StyleLineFunc = nil
+		return
+	}
+
+	// Capture selection bounds instead of building a set: viewport renders only
+	// a window of rows at a time (~screen height), so a range check is cheaper
+	// than allocating and populating a map every selection update / drag tick.
+	var selActive bool
+	var selStart, selEnd int
+	if sel.Source == selectSourceHistory && (sel.Active || sel.Dragging) {
+		s, _, e, _ := normalizeSelection(sel.StartRow, sel.StartCol, sel.EndRow, sel.EndCol)
+		selStart = clamp(s, 0, len(m.scrollbackLines)-1)
+		selEnd = clamp(e, 0, len(m.scrollbackLines)-1)
+		selActive = true
+	}
+
+	selectionStyle := lipgloss.NewStyle().
+		Foreground(m.theme.color(m.theme.StatusBarFG)).
+		Background(m.theme.color(m.theme.StatusActivePanelBG))
+	bookmarkStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.theme.color(m.theme.OverlayFG)).
+		Background(m.theme.color(m.theme.ActiveNormalTitleBG))
+	searchMatchStyle := lipgloss.NewStyle().
+		Foreground(m.theme.color(m.theme.StatusBarFG)).
+		Background(m.theme.color(m.theme.StatusHintBG))
+	searchCurrentStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.theme.color(m.theme.OverlayFG)).
+		Background(m.theme.color(m.theme.StatusModeNormalBG))
+
+	m.scrollbackView.StyleLineFunc = func(line int) lipgloss.Style {
+		if line < 0 || line >= len(m.scrollbackDisplayToHistory) {
+			return lipgloss.NewStyle()
+		}
+		hline := m.scrollbackDisplayToHistory[line]
+		if hline < 0 {
+			// Marker row.
+			return lipgloss.NewStyle().
+				Bold(true).
+				Foreground(m.theme.color(m.theme.StatusHintFG))
+		}
+		if hline >= len(m.scrollbackLines) {
+			return lipgloss.NewStyle()
+		}
+		if selActive && hline >= selStart && hline <= selEnd &&
+			strings.TrimSpace(m.scrollbackLines[hline].Text) != "" {
+			return selectionStyle
+		}
+		if m.scrollbackMarked != nil {
+			if _, ok := m.scrollbackMarked[m.scrollbackLines[hline].ID]; ok {
+				return bookmarkStyle
+			}
+		}
+		if hline < len(m.scrollbackSearchMatchHit) && m.scrollbackSearchMatchHit[hline] {
+			if m.scrollbackSearchIdx >= 0 &&
+				m.scrollbackSearchIdx < len(m.scrollbackSearchMatches) &&
+				m.scrollbackSearchMatches[m.scrollbackSearchIdx] == hline {
+				return searchCurrentStyle
+			}
+			return searchMatchStyle
+		}
+		return lipgloss.NewStyle()
 	}
 }
 
@@ -967,27 +2065,9 @@ func (m Model) visibleMaximizedPanel() (int, bool) {
 
 func (m *Model) ensureScrollState() {
 	n := len(m.panels)
-	if len(m.scrollOffsets) != n {
-		m.scrollOffsets = resizeIntSlice(m.scrollOffsets, n, 0)
-	}
-	if len(m.scrollSelections) != n {
-		m.scrollSelections = resizeIntSlice(m.scrollSelections, n, -1)
-	}
-	if len(m.scrollMarks) != n {
-		m.scrollMarks = resizeUint64Slice(m.scrollMarks, n)
-	}
 	if len(m.selections) != n {
 		m.selections = resizeSelectionSlice(m.selections, n)
 	}
-}
-
-func resizeIntSlice(prev []int, n int, fill int) []int {
-	out := make([]int, n)
-	copy(out, prev)
-	for i := len(prev); i < n; i++ {
-		out[i] = fill
-	}
-	return out
 }
 
 func (m Model) formatStartupLog(idx int, line string) string {
@@ -1077,43 +2157,10 @@ func formatStartupStatusLine(theme Theme, item startupItem, runningSpinner strin
 	}
 }
 
-func resizeUint64Slice(prev []uint64, n int) []uint64 {
-	out := make([]uint64, n)
-	copy(out, prev)
-	return out
-}
-
 func resizeSelectionSlice(prev []panelSelection, n int) []panelSelection {
 	out := make([]panelSelection, n)
 	copy(out, prev)
 	return out
-}
-
-func (m *Model) activePanelScrolledBack() bool {
-	return m.panelScrolledBack(m.activePanel)
-}
-
-func (m *Model) panelScrolledBack(idx int) bool {
-	return idx >= 0 && idx < len(m.scrollOffsets) && m.scrollOffsets[idx] > 0
-}
-
-func (m *Model) scrollActivePanelToLive() {
-	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
-	}
-	m.ensureScrollState()
-	idx := m.activePanel
-	m.scrollOffsets[idx] = 0
-	lines := m.historyLines(m.panels[idx])
-	m.reconcileScrollState(idx, lines)
-	if len(lines) == 0 {
-		m.scrollSelections[idx] = -1
-	} else {
-		m.scrollSelections[idx] = len(lines) - 1
-	}
-	if idx < len(m.selections) && m.selections[idx].Source == selectSourceHistory {
-		m.selections[idx] = panelSelection{}
-	}
 }
 
 func (m *Model) hasActiveSelection() bool {
@@ -1175,13 +2222,9 @@ func (m *Model) beginSelection(row, col int) {
 	}
 	m.ensureScrollState()
 	idx := m.activePanel
-	source := selectSourceLive
-	if m.panelScrolledBack(idx) {
-		source = selectSourceHistory
-	}
 	m.selections[idx] = panelSelection{
 		Dragging: true,
-		Source:   source,
+		Source:   selectSourceLive,
 		StartRow: row,
 		StartCol: col,
 		EndRow:   row,
@@ -1195,11 +2238,7 @@ func (m *Model) startSelection(row, col int) {
 	}
 	m.ensureScrollState()
 	idx := m.activePanel
-	source := selectSourceLive
-	if m.panelScrolledBack(idx) {
-		source = selectSourceHistory
-	}
-	sel := panelSelection{Source: source}
+	sel := panelSelection{Source: selectSourceLive}
 	sel.Active = true
 	sel.Dragging = true
 	sel.StartRow = row
@@ -1246,160 +2285,6 @@ func (m *Model) finishSelection(row, col int) {
 	m.selections[idx] = sel
 }
 
-func (m *Model) handleScrollKey(msg tea.KeyPressMsg) bool {
-	switch msg.String() {
-	case "pgup":
-		m.scrollViewportBy(-m.activePaneLineCapacity())
-		return true
-	case "pgdown":
-		m.scrollViewportBy(m.activePaneLineCapacity())
-		return true
-	}
-
-	if msg.Mod == 0 {
-		if runes := []rune(msg.Text); len(runes) == 1 {
-			switch runes[0] {
-			case 'G':
-				if m.activePanelScrolledBack() {
-					m.scrollActivePanelToLive()
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func (m *Model) scrollViewportBy(delta int) {
-	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
-	}
-	m.ensureScrollState()
-
-	idx := m.activePanel
-	lines := m.historyLines(m.panels[idx])
-	m.reconcileScrollState(idx, lines)
-	if len(lines) == 0 {
-		return
-	}
-
-	pageSize := max(1, m.activePaneLineCapacity())
-	maxOffset := max(0, len(lines)-pageSize)
-	m.scrollOffsets[idx] = clamp(m.scrollOffsets[idx]-delta, 0, maxOffset)
-
-	start := m.viewportStart(len(lines), pageSize, m.scrollOffsets[idx])
-	end := min(len(lines), start+pageSize)
-	if end <= start {
-		m.scrollSelections[idx] = -1
-		return
-	}
-
-	if m.scrollSelections[idx] < start {
-		m.scrollSelections[idx] = start
-	}
-	if m.scrollSelections[idx] >= end {
-		m.scrollSelections[idx] = end - 1
-	}
-}
-
-func (m *Model) moveSelectionBy(delta int) {
-	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
-	}
-	m.ensureScrollState()
-
-	idx := m.activePanel
-	lines := m.historyLines(m.panels[idx])
-	m.reconcileScrollState(idx, lines)
-	if len(lines) == 0 {
-		return
-	}
-
-	if m.scrollSelections[idx] < 0 || m.scrollSelections[idx] >= len(lines) {
-		m.scrollSelections[idx] = len(lines) - 1
-	}
-	m.scrollSelections[idx] = clamp(m.scrollSelections[idx]+delta, 0, len(lines)-1)
-	m.ensureSelectionVisible(idx, len(lines))
-}
-
-func (m *Model) jumpSelectionTo(target int) {
-	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
-	}
-	m.ensureScrollState()
-
-	idx := m.activePanel
-	lines := m.historyLines(m.panels[idx])
-	m.reconcileScrollState(idx, lines)
-	if len(lines) == 0 {
-		return
-	}
-
-	if target < 0 {
-		target = len(lines) - 1
-	}
-	m.scrollSelections[idx] = clamp(target, 0, len(lines)-1)
-	m.ensureSelectionVisible(idx, len(lines))
-}
-
-func (m *Model) toggleMark() {
-	if m.activePanel < 0 || m.activePanel >= len(m.panels) {
-		return
-	}
-	m.ensureScrollState()
-
-	idx := m.activePanel
-	lines := m.historyLines(m.panels[idx])
-	m.reconcileScrollState(idx, lines)
-	sel := m.scrollSelections[idx]
-	if sel < 0 || sel >= len(lines) {
-		return
-	}
-
-	if m.scrollMarks[idx] == lines[sel].ID {
-		m.clearMark(idx)
-		return
-	}
-	m.scrollMarks[idx] = lines[sel].ID
-}
-
-func (m *Model) ensureSelectionVisible(idx, total int) {
-	pageSize := max(1, m.activePaneLineCapacity())
-	maxOffset := max(0, total-pageSize)
-	start := m.viewportStart(total, pageSize, m.scrollOffsets[idx])
-	end := min(total, start+pageSize)
-	sel := m.scrollSelections[idx]
-
-	if sel < start {
-		start = sel
-	} else if sel >= end {
-		start = sel - pageSize + 1
-	}
-	start = clamp(start, 0, maxOffset)
-	m.scrollOffsets[idx] = maxOffset - start
-}
-
-func (m *Model) reconcileScrollState(idx int, lines []process.HistoryLine) {
-	total := len(lines)
-	pageSize := max(1, m.activePaneLineCapacity())
-	maxOffset := max(0, total-pageSize)
-	m.scrollOffsets[idx] = clamp(m.scrollOffsets[idx], 0, maxOffset)
-
-	if total == 0 {
-		m.scrollSelections[idx] = -1
-		m.clearMark(idx)
-		return
-	}
-
-	if m.scrollSelections[idx] >= total {
-		m.scrollSelections[idx] = total - 1
-	}
-	if m.scrollSelections[idx] < -1 {
-		m.scrollSelections[idx] = -1
-	}
-
-}
-
 func (m *Model) viewportForPanel(idx, height int) *paneViewport {
 	if idx != m.activePanel {
 		return nil
@@ -1411,46 +2296,12 @@ func (m *Model) viewportForPanel(idx, height int) *paneViewport {
 	m.ensureScrollState()
 	pageSize := max(1, paneLineCapacity(height))
 	if idx < len(m.selections) && m.selections[idx].Active {
+		if m.selections[idx].Source != selectSourceLive {
+			return nil
+		}
 		return m.selectViewportForPanel(idx, pageSize)
 	}
-	if m.panelScrolledBack(idx) {
-		return m.historyViewportForPanel(idx, pageSize)
-	}
 	return nil
-}
-
-func (m *Model) historyViewportForPanel(idx, pageSize int) *paneViewport {
-	history := m.historyLines(m.panels[idx])
-	if len(history) == 0 {
-		m.reconcileScrollState(idx, history)
-		return &paneViewport{Lines: make([]string, pageSize), SelectedRow: -1, MarkedRow: -1}
-	}
-	m.reconcileScrollState(idx, history)
-
-	start := m.viewportStart(len(history), pageSize, m.scrollOffsets[idx])
-	end := min(len(history), start+pageSize)
-	selectedRow := -1
-	if sel := m.scrollSelections[idx]; sel >= start && sel < end {
-		selectedRow = sel - start
-	}
-	markedRow := -1
-	if markID := m.scrollMarks[idx]; markID != 0 {
-		if mark, ok := findLineIndexByID(history, markID); ok && mark >= start && mark < end {
-			markedRow = mark - start
-		}
-	}
-
-	viewportLines := make([]string, 0, end-start)
-	for _, line := range history[start:end] {
-		viewportLines = append(viewportLines, line.Text)
-	}
-
-	return &paneViewport{
-		Lines:       viewportLines,
-		PlainLines:  append([]string(nil), viewportLines...),
-		SelectedRow: selectedRow,
-		MarkedRow:   markedRow,
-	}
 }
 
 func (m *Model) selectViewportForPanel(idx, pageSize int) *paneViewport {
@@ -1493,24 +2344,6 @@ func (m *Model) selectionLinesForPanel(idx, pageSize int) ([]string, []string) {
 	width := m.activePaneContentWidth()
 	if width <= 0 {
 		width = 1
-	}
-	if idx < len(m.selections) && m.selections[idx].Source == selectSourceHistory {
-		history := m.historyLines(m.panels[idx])
-		if len(history) == 0 {
-			lines := make([]string, pageSize)
-			return lines, append([]string(nil), lines...)
-		}
-		m.reconcileScrollState(idx, history)
-		start := m.viewportStart(len(history), pageSize, m.scrollOffsets[idx])
-		end := min(len(history), start+pageSize)
-		lines := make([]string, 0, pageSize)
-		for _, line := range history[start:end] {
-			lines = append(lines, padOrTruncate(line.Text, width))
-		}
-		for len(lines) < pageSize {
-			lines = append(lines, strings.Repeat(" ", width))
-		}
-		return lines, append([]string(nil), lines...)
 	}
 
 	view := m.displayForView(m.panels[idx])
@@ -1600,6 +2433,9 @@ func (m *Model) currentSelectionText() string {
 	if !sel.Active {
 		return ""
 	}
+	if sel.Source == selectSourceHistory && m.scrollbackActive && idx == m.scrollbackPanel {
+		return m.scrollbackSelectionText(sel)
+	}
 	_, lines := m.selectionLinesForPanel(idx, m.activePaneLineCapacity())
 	if len(lines) == 0 {
 		return ""
@@ -1633,26 +2469,50 @@ func (m *Model) currentSelectionText() string {
 	return strings.Join(selected, "\n")
 }
 
-func (m Model) viewportStart(total, pageSize, offset int) int {
-	if total <= pageSize {
-		return 0
+func (m *Model) scrollbackSelectionText(sel panelSelection) string {
+	if len(m.scrollbackLines) == 0 {
+		return ""
 	}
-	maxOffset := total - pageSize
-	offset = clamp(offset, 0, maxOffset)
-	return total - pageSize - offset
-}
+	startRow, startCol, endRow, endCol := normalizeSelection(sel.StartRow, sel.StartCol, sel.EndRow, sel.EndCol)
+	startRow = clamp(startRow, 0, len(m.scrollbackLines)-1)
+	endRow = clamp(endRow, 0, len(m.scrollbackLines)-1)
 
-func (m *Model) clearMark(idx int) {
-	m.scrollMarks[idx] = 0
-}
-
-func findLineIndexByID(lines []process.HistoryLine, want uint64) (int, bool) {
-	for i, line := range lines {
-		if line.ID == want {
-			return i, true
+	visibleWidth := max(1, m.scrollbackView.Width())
+	visibleStart := max(0, m.scrollbackView.XOffset())
+	visibleEnd := visibleStart + visibleWidth
+	if m.scrollbackShowLineNumbers {
+		visibleStart -= m.scrollbackLineNumberPrefixWidth
+		visibleEnd -= m.scrollbackLineNumberPrefixWidth
+		if visibleStart < 0 {
+			visibleStart = 0
+		}
+		if visibleEnd < 0 {
+			visibleEnd = 0
 		}
 	}
-	return -1, false
+	startCol = max(0, startCol)
+	endCol = max(0, endCol)
+
+	selected := make([]string, 0, endRow-startRow+1)
+	for row := startRow; row <= endRow; row++ {
+		lineStart := visibleStart
+		lineEnd := visibleEnd
+		if row == startRow {
+			lineStart = startCol
+		}
+		if row == endRow {
+			lineEnd = endCol + 1
+		}
+		if lineEnd < lineStart {
+			lineStart, lineEnd = lineEnd, lineStart
+		}
+		fragment := strings.TrimRight(sliceByCells(m.scrollbackLines[row].Text, lineStart, lineEnd), " ")
+		if strings.TrimSpace(fragment) == "" {
+			continue
+		}
+		selected = append(selected, fragment)
+	}
+	return strings.Join(selected, "\n")
 }
 
 func (m Model) gridPanelInnerSize() (int, int) {
@@ -1675,7 +2535,7 @@ func (m Model) renderStatusLine() string {
 	modeFG := m.theme.color(m.theme.StatusModeNoneFG)
 	modeBG := m.theme.color(m.theme.StatusModeNoneBG)
 	switch mode {
-	case "NORMAL":
+	case "NORMAL", "SCROLLBACK":
 		modeFG = m.theme.color(m.theme.StatusModeNormalFG)
 		modeBG = m.theme.color(m.theme.StatusModeNormalBG)
 	case "INSERT":

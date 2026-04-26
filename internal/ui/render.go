@@ -213,6 +213,50 @@ func renderEmptyPane(theme Theme, width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, box)
 }
 
+func renderScrollbackPane(theme Theme, title, viewportContent string, width, height int) string {
+	innerW := width - 2
+	innerH := height - 2
+	if innerW < 1 {
+		innerW = 1
+	}
+	if innerH < 1 {
+		innerH = 1
+	}
+
+	titleRenderer := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(theme.color(theme.ActiveNormalTitleFG)).
+		Background(theme.color(theme.ActiveNormalTitleBG)).
+		Padding(0, 1)
+	titleSeparatorRenderer := lipgloss.NewStyle().Foreground(theme.color(theme.ActiveNormalTitleBG))
+	borderRenderer := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(theme.color(theme.ActiveNormalBorder))
+
+	titleChip := titleRenderer.Render(title)
+	titleBar := padOrTruncate(titleChip+titleSeparatorRenderer.Render(""), innerW)
+	contentH := innerH - 1
+	if contentH < 0 {
+		contentH = 0
+	}
+	content := lipgloss.NewStyle().
+		Width(innerW).
+		Height(contentH).
+		Render(viewportContent)
+
+	inner := titleBar
+	if contentH > 0 {
+		inner += "\n" + content
+	}
+
+	box := borderRenderer.
+		Width(width).
+		Height(height).
+		Render(inner)
+
+	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, box)
+}
+
 func renderPaneFooter(theme Theme, base string, width int, reloadHint bool, timer string) string {
 	if width < 1 {
 		return ""
@@ -525,6 +569,86 @@ func sliceByCells(line string, startCol, endCol int) string {
 		}
 	}
 	return out.String()
+}
+
+// floatOverlayCentered composites `overlay` on top of `base` as a floating
+// rectangle: lines outside the overlay's bounding box are kept from `base`,
+// and within the box the overlay replaces the base cells. The overlay itself
+// stays opaque (so the dialog is readable), but the rest of the TUI remains
+// visible around it.
+func floatOverlayCentered(base, overlay string, width, height int) string {
+	if width <= 0 || height <= 0 || overlay == "" {
+		return base
+	}
+
+	overlayLines := strings.Split(overlay, "\n")
+	ovH := len(overlayLines)
+	ovW := 0
+	for _, l := range overlayLines {
+		if w := ansi.StringWidth(l); w > ovW {
+			ovW = w
+		}
+	}
+	if ovW == 0 || ovH == 0 {
+		return base
+	}
+	if ovW > width {
+		ovW = width
+	}
+	if ovH > height {
+		ovH = height
+	}
+	startX := (width - ovW) / 2
+	startY := (height - ovH) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	if startY < 0 {
+		startY = 0
+	}
+	endX := startX + ovW
+	endY := startY + ovH
+
+	baseLines := strings.Split(base, "\n")
+	if len(baseLines) < height {
+		filler := make([]string, height-len(baseLines))
+		baseLines = append(baseLines, filler...)
+	}
+
+	out := make([]string, 0, len(baseLines))
+	for i, baseLine := range baseLines {
+		if i < startY || i >= endY {
+			out = append(out, baseLine)
+			continue
+		}
+		ovLine := ""
+		if oi := i - startY; oi >= 0 && oi < len(overlayLines) {
+			ovLine = overlayLines[oi]
+		}
+		out = append(out, spliceOverlayLine(baseLine, ovLine, startX, endX, ovW))
+	}
+	return strings.Join(out, "\n")
+}
+
+// spliceOverlayLine replaces cells [startX, endX) of baseLine with overlayLine
+// (kept whole, padded to ovW so vertical edges align). Cells in baseLine
+// outside that horizontal range are preserved.
+func spliceOverlayLine(baseLine, overlayLine string, startX, endX, ovW int) string {
+	baseW := ansi.StringWidth(baseLine)
+	if baseW < endX {
+		baseLine = baseLine + strings.Repeat(" ", endX-baseW)
+		baseW = endX
+	}
+	left := ansi.Cut(baseLine, 0, startX)
+	right := ansi.Cut(baseLine, endX, max(endX, baseW))
+
+	if w := ansi.StringWidth(overlayLine); w < ovW {
+		overlayLine = overlayLine + strings.Repeat(" ", ovW-w)
+	} else if w > ovW {
+		overlayLine = ansi.Truncate(overlayLine, ovW, "")
+	}
+
+	return left + overlayLine + right
 }
 
 func padOrTruncate(line string, targetWidth int) string {

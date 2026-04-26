@@ -129,12 +129,14 @@ The shortest path to using muxedo:
 - Press `Esc` once to return to normal mode, then `Esc` again to unfocus the panel.
 - Press `h` `j` `k` `l` in normal mode to move between panels.
 - Press `1` to `9` in normal mode to jump to the first nine panels.
-- Use the mouse wheel or `PgUp`/`PgDn` in a focused panel to inspect scrollback.
-- Press `G` or `Esc` while scrolled back to return to the live bottom.
-- Drag inside a focused panel to select text, then press `y` or `Enter` in normal mode to copy it.
+- Press `s` in normal mode to open the focused panel's scrollback.
+- Use the mouse wheel, `PgUp`/`PgDn`, arrows, `j`/`k`, or `g`/`G` in scrollback to navigate.
+- Press `Esc` in scrollback to return to the live panel.
+- Drag inside a live panel or scrollback to select text, then press `y` or `Enter` to copy it.
 - Press `r` in normal mode to restart the focused panel.
 - Press `x` in normal mode to stop the focused panel and run its optional kill command.
 - Press `m` in normal mode to maximize or restore the focused panel.
+- Press `?` (not in insert mode) to open a help dialog with shortcuts.
 - Press `Ctrl+B` to toggle the Message Buffer.
 - Press `q` or `Ctrl+C` to quit when no panel is focused.
 
@@ -154,7 +156,7 @@ dir = "~/.cache/muxedo/scrollback"
 max_bytes = 1048576
 ```
 
-`dir` defaults to the OS cache directory. `max_bytes` defaults to `1 MiB` per panel, and `0` means unlimited.
+`dir` defaults to the OS cache directory. `max_bytes` defaults to `0` (unlimited), and you can set it to a value like `1048576` to cap scrollback per panel.
 
 Restarting a panel with `R` clears that panel's scrollback file for the current run.
 

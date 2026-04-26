@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hinshun/vt10x"
 )
 
@@ -160,7 +161,8 @@ func (p *Panel) readLoop(ptmx *os.File) {
 			p.termMu.Unlock()
 			p.markDisplayDirty()
 			if p.sb != nil {
-				p.sb.Capture(termSnap)
+				// Persist scrollback as plain text; ANSI churn breaks scroll detection.
+				p.sb.Capture(ansi.Strip(termSnap))
 			}
 		}
 		if err != nil {
@@ -363,7 +365,7 @@ func (p *Panel) HistoryLines() []string {
 
 // History returns panel history with stable line identifiers.
 func (p *Panel) History() []HistoryLine {
-	screen := normalizeScreen(p.Output())
+	screen := normalizeScreen(ansi.Strip(p.Output()))
 	if p.sb == nil {
 		out := make([]HistoryLine, len(screen))
 		for i, line := range screen {
