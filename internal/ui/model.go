@@ -3,7 +3,6 @@ package ui
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -125,20 +124,6 @@ func newMsgChan() chan tea.Msg {
 	return make(chan tea.Msg, msgChanBufferSize)
 }
 
-func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
-	return func() tea.Msg {
-		var errText string
-		if err := p.RunCmdKill(); err != nil {
-			errText = fmt.Sprintf("kill command failed: %v", err)
-		}
-		p.Stop()
-		return exitProgressMsg{
-			panelIdx: idx,
-			errText:  errText,
-		}
-	}
-}
-
 func isExpectedInterruptExit(err error) bool {
 	if err == nil {
 		return false
@@ -159,10 +144,6 @@ func isExpectedInterruptExit(err error) bool {
 func gracefulQuitPanelCmd(idx int, p *process.Panel) tea.Cmd {
 	return func() tea.Msg {
 		var errText string
-		// Kill command should be allowed to complete (no timeout).
-		if err := p.RunCmdKillContext(context.Background()); err != nil {
-			errText = fmt.Sprintf("kill command failed: %v", err)
-		}
 		// Ask process to stop but do not force-kill.
 		p.RequestInterrupt()
 		if err := p.WaitForExit(); err != nil && errText == "" && !isExpectedInterruptExit(err) {
@@ -243,7 +224,7 @@ type Model struct {
 	teardownItems     []startupItem
 	teardownCompleted bool
 	teardownHadError  bool
-	msgChan          chan tea.Msg
+	msgChan           chan tea.Msg
 }
 
 func NewModel(panels []*process.Panel, themes ...Theme) Model {
@@ -837,8 +818,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case 'x', 'X':
 						m.killingPanel = true
 						m.killingPanelIdx = m.activePanel
-						m.killStatus = fmt.Sprintf("exiting panel %s....", p.Name)
-						return m, killPanelCmd(m.activePanel, p)
+						m.killStatus = ""
+						return m, func() tea.Msg {
+							p.Stop()
+							return exitProgressMsg{panelIdx: m.activePanel, errText: ""}
+						}
 					}
 				}
 			}
