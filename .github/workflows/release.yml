@@ -95,7 +95,7 @@ jobs:
             exit 1
           fi
 
-          git fetch origin "$head_branch:refs/remotes/origin/$head_branch"
+          git fetch origin "+refs/heads/$head_branch:refs/remotes/origin/$head_branch"
 
           section="$(git show "origin/$head_branch:CHANGELOG.md" | awk '
             /^## \[/ {
