@@ -6,6 +6,19 @@
 
 - **profile:** replace per-panel kill commands (`shell_kill`, `kill_program`, `kill_args`) with global `[[teardown]]` steps (supports `workingdir` + `mode=async|sync`). On quit, muxedo now stops panels, runs teardown, then exits; press `Ctrl-C`/`q` again to force quit.
 
+## [0.2.1](https://github.com/rikvanderkemp/muxedo/compare/v0.2.0...v0.2.1) (2026-04-27)
+
+
+### Features
+
+* **demo:** add configurable recording workflow ([#64](https://github.com/rikvanderkemp/muxedo/issues/64)) ([fbb1a05](https://github.com/rikvanderkemp/muxedo/commit/fbb1a05409c5f9fac96333b7d1db7ab50233a2c9))
+
+
+### Bug Fixes
+
+* **ci:** bump actions to node24 runtime ([#62](https://github.com/rikvanderkemp/muxedo/issues/62)) ([35a3baf](https://github.com/rikvanderkemp/muxedo/commit/35a3bafa16c4cc3856d5bbaee01e02e99f808ac3))
+* **ci:** force-fetch release branch ([#65](https://github.com/rikvanderkemp/muxedo/issues/65)) ([43e9ce0](https://github.com/rikvanderkemp/muxedo/commit/43e9ce0c23af5b52c1962fea08596a300c8c95ed))
+
 ## [0.2.0](https://github.com/rikvanderkemp/muxedo/compare/v0.1.20...v0.2.0) (2026-04-27)
 
 
