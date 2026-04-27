@@ -1,5 +1,6 @@
 muxedo
 config.toml
+__pycache__/
 
 # Compiled `go test -c` binaries.
 *.test

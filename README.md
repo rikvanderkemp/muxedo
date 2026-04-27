@@ -20,6 +20,14 @@ It is built for the "run a few long-lived commands and keep them visible" workfl
 
 Recorded demo showing async startup progress in the Message Buffer and a focused panel in insert mode.
 
+To refresh the local demo recording, edit [docs/demo/session.toml](docs/demo/session.toml) and run:
+
+```bash
+scripts/record_demo.sh
+```
+
+The script writes `docs/media/demo.cast` with ANSI color sequences preserved. If `agg` is installed, it also refreshes `docs/media/demo.gif`.
+
 ## Install
 
 ### Homebrew (macOS and Linux)

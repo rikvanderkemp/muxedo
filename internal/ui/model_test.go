@@ -982,6 +982,44 @@ func TestExitSpinnerTicksWhileExiting(t *testing.T) {
 	}
 }
 
+func TestExitDialogFitsViewportWithTeardown(t *testing.T) {
+	model := NewModelWithSpecs("test", nil, []profile.StartupSpec{
+		{
+			WorkingDir: ".",
+			Command: process.CommandSpec{
+				Shell: "printf 'this is intentionally long teardown output'; sleep 5",
+			},
+			Mode: profile.StartupModeAsync,
+		},
+		{
+			WorkingDir: ".",
+			Command: process.CommandSpec{
+				Shell: "sleep 3",
+			},
+			Mode: profile.StartupModeSync,
+		},
+	}, []profile.PanelSpec{
+		{Name: "clock", WorkingDir: ".", Command: process.CommandSpec{Shell: "date"}},
+		{Name: "echo", WorkingDir: ".", Command: process.CommandSpec{Shell: "cat"}},
+	}, profile.ScrollbackConfig{}, DefaultTheme())
+	model.width = 80
+	model.height = 24
+	model.exiting = true
+	model.exitItems = []exitItem{
+		{Name: "clock", Status: exitStatusOK},
+		{Name: "echo", Status: exitStatusRunning},
+	}
+	model.teardownItems[0].Status = startupStatusRunning
+	model.teardownItems[1].Status = startupStatusRunning
+
+	got := model.wrapExiting("")
+	for i, line := range strings.Split(got, "\n") {
+		if width := ansi.StringWidth(line); width > model.width {
+			t.Fatalf("line %d exceeds viewport width: got %d want <= %d: %q", i+1, width, model.width, ansi.Strip(line))
+		}
+	}
+}
+
 func TestAsyncTeardownDoesNotQuitEarly(t *testing.T) {
 	if _, err := os.Stat("/dev/ptmx"); err != nil {
 		t.Skipf("skipping PTY-dependent test: %v", err)

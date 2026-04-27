@@ -11,12 +11,16 @@ program = "sleep"
 args = ["2"]
 
 [[teardown]]
-shell = "sleep 5"
+shell = "sleep 2"
 mode = "async"
 
 [[teardown]]
-shell = "sleep 3"
+shell = "sleep 1"
 mode = "sync"
+
+[[teardown]]
+shell = "sleep 1.4"
+mode = "async"
 
 [panel.clock]
 order = 0

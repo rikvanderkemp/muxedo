@@ -1,0 +1,51 @@
+# Editable local demo sequence for scripts/demo_session.py.
+#
+# Reorder the [[step]] blocks to change the recording flow.
+cols = 100
+rows = 30
+profile = "profile.toml.example"
+startup_wait = "3s"
+
+[[step]]
+key = "4"
+wait = "500ms"
+
+[[step]]
+key = "i"
+wait = "500ms"
+
+[[step]]
+text = "hello from muxedo demo\n"
+wait = "600ms"
+
+[[step]]
+key = "esc"
+wait = "750ms"
+
+[[step]]
+key = "2"
+wait = "500ms"
+
+[[step]]
+key = "s"
+wait = "1000ms"
+
+[[step]]
+key = "r"
+wait = "1000ms"
+
+[[step]]
+key = "r"
+wait = "2000ms"
+
+[[step]]
+key = "esc"
+wait = "250ms"
+
+[[step]]
+key = "esc"
+wait = "1250ms"
+
+[[step]]
+key = "q"
+wait = "250ms"
