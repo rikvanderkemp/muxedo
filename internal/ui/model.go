@@ -1239,7 +1239,7 @@ func (m Model) wrapExiting(body string) string {
 		BorderForeground(m.theme.color(m.theme.ActiveNormalBorder)).
 		Background(m.theme.color(m.theme.OverlayBG)).
 		Padding(1, 2).
-		Width(maxW).
+		Width(innerW).
 		MaxWidth(maxW).
 		Render(content)
 
