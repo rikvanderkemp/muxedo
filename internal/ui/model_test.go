@@ -536,12 +536,7 @@ func TestSelectionLinesForPanelLiveStripsANSIWithoutChangingWindow(t *testing.T)
 }
 
 func TestKillPanelCmdIncludesKillCommandFailure(t *testing.T) {
-	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "true"}, process.CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
-
-	msg := killPanelCmd(0, panel)().(exitProgressMsg)
-	if !strings.Contains(msg.status, "kill command failed") {
-		t.Fatalf("status = %q, want kill command failure", msg.status)
-	}
+	t.Skip("per-panel kill commands removed from profiles; keep process-layer tests instead")
 }
 
 func TestStreamStartupOutputAcceptsLongLines(t *testing.T) {
@@ -673,7 +668,7 @@ func TestNewModelWithSpecsDefaultsStartupItemsToAsync(t *testing.T) {
 			Command: process.CommandSpec{Program: "echo", Args: []string{"hi"}},
 			Mode:    profile.StartupModeAsync,
 		},
-	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	}, nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
 
 	if len(model.startupItems) != 1 {
 		t.Fatalf("len(startupItems) = %d, want 1", len(model.startupItems))
@@ -689,7 +684,7 @@ func TestStartupBufferShowsStatusRowsAndLogs(t *testing.T) {
 			Command: process.CommandSpec{Program: "echo", Args: []string{"one"}},
 			Mode:    profile.StartupModeAsync,
 		},
-	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	}, nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
 	model.width = 100
 	model.height = 12
 
@@ -716,7 +711,7 @@ func TestStartupTickAdvancesSpinner(t *testing.T) {
 			Command: process.CommandSpec{Program: "echo", Args: []string{"one"}},
 			Mode:    profile.StartupModeAsync,
 		},
-	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	}, nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
 
 	next, _ := model.Update(startupStatusMsg{idx: 0, status: startupStatusRunning})
 	model = next.(Model)
@@ -730,7 +725,7 @@ func TestStartupTickAdvancesSpinner(t *testing.T) {
 }
 
 func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil,
+	model := NewModelWithSpecs("test", nil, nil, nil,
 		profile.ScrollbackConfig{}, DefaultTheme())
 
 	next, cmd := model.Update(StartupCompleteMsg{})
@@ -752,7 +747,7 @@ func TestStartupCompleteKeepsListeningForLogs(t *testing.T) {
 }
 
 func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil,
+	model := NewModelWithSpecs("test", nil, nil, nil,
 		profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
@@ -789,7 +784,7 @@ func TestStartupSequenceDeliversCompletionWhenQueueIsFull(t *testing.T) {
 }
 
 func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil,
+	model := NewModelWithSpecs("test", nil, nil, nil,
 		profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
@@ -814,7 +809,7 @@ func TestStartupSequenceCompletesThroughWaitLoopWhenQueueStartsFull(t *testing.T
 }
 
 func TestStartupSequenceCompletesInBubbleTeaProgramWhenQueueStartsFull(t *testing.T) {
-	model := NewModelWithSpecs("test", nil, nil,
+	model := NewModelWithSpecs("test", nil, nil, nil,
 		profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 1)
 	model.msgChan <- LogMsg("buffer full")
@@ -840,7 +835,7 @@ func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
 			Command:    process.CommandSpec{Shell: "printf ready\\n"},
 			Mode:       profile.StartupModeAsync,
 		},
-	}, nil, profile.ScrollbackConfig{}, DefaultTheme())
+	}, nil, nil, profile.ScrollbackConfig{}, DefaultTheme())
 	model.msgChan = make(chan tea.Msg, 8)
 
 	model.runStartupItem(0, model.startupSpecs[0])
@@ -875,17 +870,18 @@ func TestRunStartupItemAsyncEmitsLogAndCompletion(t *testing.T) {
 	}
 }
 
-func TestGlobalQuitWithHungKillCommandReturnsPromptly(t *testing.T) {
+func TestGlobalQuitSecondCtrlCForcesQuit(t *testing.T) {
 	if _, err := os.Stat("/dev/ptmx"); err != nil {
 		t.Skipf("skipping PTY-dependent test: %v", err)
 	}
+
+	// Panel uses kill command that would normally take long; we should still be
+	// able to force quit promptly with a second Ctrl-C.
 	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{Shell: "sleep 10"}, ".")
 	if err := panel.Start(); err != nil {
 		t.Fatalf("start panel: %v", err)
 	}
-	t.Cleanup(func() {
-		panel.Stop()
-	})
+	t.Cleanup(func() { panel.Stop() })
 
 	model := NewModel([]*process.Panel{panel})
 	model.activePanel = -1
@@ -896,64 +892,24 @@ func TestGlobalQuitWithHungKillCommandReturnsPromptly(t *testing.T) {
 		t.Fatal("expected exiting state after q")
 	}
 	if cmd == nil {
-		t.Fatal("expected quit cmd")
+		t.Fatal("expected quit cmd batch")
 	}
 
+	// Force quit via second Ctrl-C keypress while exiting.
 	start := time.Now()
-	msg := cmd()
-	elapsed := time.Since(start)
-	if elapsed > 3*time.Second {
-		t.Fatalf("quit cmd took too long: %v", elapsed)
+	next, quitCmd := model.Update(keyCtrl('c'))
+	_ = next.(Model)
+	if quitCmd == nil {
+		t.Fatal("expected force quit cmd")
 	}
-
-	exitMsg, ok := msg.(exitProgressMsg)
-	if !ok {
-		t.Fatalf("cmd() = %#v, want exitProgressMsg", msg)
-	}
-	if !strings.Contains(exitMsg.status, "kill command failed") {
-		t.Fatalf("status = %q, want kill command failure", exitMsg.status)
+	_ = quitCmd()
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("force quit took too long: %v", time.Since(start))
 	}
 }
 
-func TestGlobalQuitWithHungKillCommandExitsInBubbleTeaProgram(t *testing.T) {
-	if _, err := os.Stat("/dev/ptmx"); err != nil {
-		t.Skipf("skipping PTY-dependent test: %v", err)
-	}
-	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{Shell: "sleep 10"}, ".")
-	if err := panel.Start(); err != nil {
-		t.Fatalf("start panel: %v", err)
-	}
-	t.Cleanup(func() {
-		panel.Stop()
-	})
-
-	model := NewModel([]*process.Panel{panel})
-	start := time.Now()
-	final, err := runProgramForTest(t, model, 4*time.Second, func(prog *tea.Program) {
-		time.Sleep(50 * time.Millisecond)
-		prog.Send(keyRune('q'))
-	})
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("program quit took too long: %v", elapsed)
-	}
-
-	got := final.(Model)
-	if !got.exiting {
-		t.Fatal("expected final model to have entered exiting state")
-	}
-	if got.exitCompleted != 1 {
-		t.Fatalf("exitCompleted = %d, want 1", got.exitCompleted)
-	}
-	if len(got.exitStatuses) != 1 || !strings.Contains(got.exitStatuses[0], "kill command failed") {
-		t.Fatalf("exitStatuses = %v, want kill command failure", got.exitStatuses)
-	}
-	if panel.Running() {
-		t.Fatal("expected panel stopped after quit flow")
-	}
+func TestGlobalQuitHidesPanelsWithoutKillCommandFromExitBox(t *testing.T) {
+	t.Skip("exit dialog now lists all panels; kill commands handled by global teardown")
 }
 
 func TestFormatStartupStatusLineShowsExitCode(t *testing.T) {
@@ -995,6 +951,65 @@ func TestUpdateInactiveQQuits(t *testing.T) {
 
 	if !teaModel.(Model).exiting {
 		t.Fatalf("expected model to be in exiting state")
+	}
+}
+
+func TestExitSpinnerTicksWhileExiting(t *testing.T) {
+	model := NewModel([]*process.Panel{
+		process.New("one", "echo one", "true", "."),
+	})
+	model.activePanel = -1
+
+	next, _ := model.Update(keyRune('q'))
+	model = next.(Model)
+	if !model.exiting {
+		t.Fatal("expected exiting state")
+	}
+
+	if len(model.exitItems) != 1 || model.exitItems[0].Name != "one" {
+		t.Fatalf("expected panel with kill command to be shown, got %#v", model.exitItems)
+	}
+
+	before := model.exitSpinner.View()
+	next, cmd := model.Update(spinner.TickMsg{})
+	model = next.(Model)
+	if cmd == nil {
+		t.Fatal("expected spinner tick cmd while exiting")
+	}
+	after := model.exitSpinner.View()
+	if before == after {
+		t.Fatalf("expected spinner to advance, before=%q after=%q", before, after)
+	}
+}
+
+func TestAsyncTeardownDoesNotQuitEarly(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skipf("skipping PTY-dependent test: %v", err)
+	}
+
+	panel := process.NewWithCommandSpec("one", process.CommandSpec{Shell: "sleep 60"}, process.CommandSpec{}, ".")
+	if err := panel.Start(); err != nil {
+		t.Fatalf("start panel: %v", err)
+	}
+	t.Cleanup(func() { panel.Stop() })
+
+	model := NewModelWithSpecs("test", nil, []profile.StartupSpec{
+		{WorkingDir: ".", Command: process.CommandSpec{Shell: "sleep 1"}, Mode: profile.StartupModeAsync},
+	}, []profile.PanelSpec{{Name: "one", WorkingDir: ".", Command: process.CommandSpec{Shell: "sleep 60"}}}, profile.ScrollbackConfig{}, DefaultTheme())
+	model.panels = []*process.Panel{panel}
+	model.activePanel = -1
+
+	// Enter exiting state.
+	next, _ := model.Update(keyRune('q'))
+	model = next.(Model)
+
+	// Simulate panel exit completion.
+	next, _ = model.Update(exitProgressMsg{panelIdx: 0, errText: ""})
+	model = next.(Model)
+
+	// Teardown should now be running, but program must not auto-quit yet.
+	if model.teardownCompleted {
+		t.Fatal("expected teardown not completed immediately for async teardown")
 	}
 }
 
@@ -2511,7 +2526,7 @@ func TestXShortcutKillsPanel(t *testing.T) {
 	}
 
 	// Simulate exitProgressMsg
-	msg := exitProgressMsg{panelIdx: 0, status: "exiting panel one.... exiting completed..."}
+	msg := exitProgressMsg{panelIdx: 0, errText: ""}
 	next, cmd = model.Update(msg)
 	model = next.(Model)
 

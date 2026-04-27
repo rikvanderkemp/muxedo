@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### ⚠️ Breaking changes
+
+- **profile:** replace per-panel kill commands (`shell_kill`, `kill_program`, `kill_args`) with global `[[teardown]]` steps (supports `workingdir` + `mode=async|sync`). On quit, muxedo now stops panels, runs teardown, then exits; press `Ctrl-C`/`q` again to force quit.
+
 ## [0.1.20](https://github.com/rikvanderkemp/muxedo/compare/v0.1.19...v0.1.20) (2026-04-26)
 
 

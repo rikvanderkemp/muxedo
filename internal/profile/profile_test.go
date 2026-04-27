@@ -93,10 +93,13 @@ func TestLoadProfileParsesShellFields(t *testing.T) {
 shell = "docker compose up -d"
 mode = "sync"
 
+[[teardown]]
+shell = "docker compose down"
+mode = "sync"
+
 [panel.api]
 workingdir = "."
 shell = "go test ./..."
-shell_kill = "pkill -f muxedo"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -112,11 +115,14 @@ shell_kill = "pkill -f muxedo"
 	if got.Startup[0].Mode != StartupModeSync {
 		t.Fatalf("Startup[0].Mode = %q, want %q", got.Startup[0].Mode, StartupModeSync)
 	}
+	if got.Teardown[0].Command.Shell != "docker compose down" {
+		t.Fatalf("Teardown[0].Command.Shell = %q", got.Teardown[0].Command.Shell)
+	}
+	if got.Teardown[0].Mode != StartupModeSync {
+		t.Fatalf("Teardown[0].Mode = %q, want %q", got.Teardown[0].Mode, StartupModeSync)
+	}
 	if got.Panels[0].Command.Shell != "go test ./..." {
 		t.Fatalf("Panels[0].Command.Shell = %q", got.Panels[0].Command.Shell)
-	}
-	if got.Panels[0].KillCommand.Shell != "pkill -f muxedo" {
-		t.Fatalf("Panels[0].KillCommand.Shell = %q", got.Panels[0].KillCommand.Shell)
 	}
 }
 
@@ -204,7 +210,7 @@ cmd = "go test ./..."
 	if err == nil {
 		t.Fatal("Load() error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "legacy cmd/cmd_kill fields") {
+	if !strings.Contains(err.Error(), "legacy cmd field") {
 		t.Fatalf("Load() error = %q", err)
 	}
 }

@@ -3,6 +3,7 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -35,6 +37,8 @@ type scrollbackMarker struct {
 type StartupCompleteMsg struct {
 	panels []*process.Panel
 }
+
+type TeardownCompleteMsg struct{}
 
 type startupStatus string
 type selectSource uint8
@@ -71,9 +75,36 @@ type startupLogMsg struct {
 	line string
 }
 
+type teardownStatusMsg struct {
+	idx         int
+	status      startupStatus
+	exitCode    int
+	hasExitCode bool
+	errText     string
+}
+
+type teardownLogMsg struct {
+	idx  int
+	line string
+}
+
 type exitProgressMsg struct {
 	panelIdx int
-	status   string
+	errText  string
+}
+
+type exitStatus uint8
+
+const (
+	exitStatusRunning exitStatus = iota
+	exitStatusOK
+	exitStatusError
+)
+
+type exitItem struct {
+	Name    string
+	Status  exitStatus
+	ErrText string
 }
 
 type panelSelection struct {
@@ -96,15 +127,48 @@ func newMsgChan() chan tea.Msg {
 
 func killPanelCmd(idx int, p *process.Panel) tea.Cmd {
 	return func() tea.Msg {
-		status := fmt.Sprintf("exiting panel %s.... exiting completed...", p.Name)
+		var errText string
 		if err := p.RunCmdKill(); err != nil {
-			status = fmt.Sprintf("exiting panel %s.... kill command failed: %v. exiting completed...", p.Name, err)
+			errText = fmt.Sprintf("kill command failed: %v", err)
 		}
 		p.Stop()
 		return exitProgressMsg{
 			panelIdx: idx,
-			status:   status,
+			errText:  errText,
 		}
+	}
+}
+
+func isExpectedInterruptExit(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	// Bubble up non-signal exits as real errors.
+	ws, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok {
+		// Fallback: common SIGINT exit code (128 + 2).
+		return exitErr.ExitCode() == 130
+	}
+	return ws.Signaled() && ws.Signal() == syscall.SIGINT
+}
+
+func gracefulQuitPanelCmd(idx int, p *process.Panel) tea.Cmd {
+	return func() tea.Msg {
+		var errText string
+		// Kill command should be allowed to complete (no timeout).
+		if err := p.RunCmdKillContext(context.Background()); err != nil {
+			errText = fmt.Sprintf("kill command failed: %v", err)
+		}
+		// Ask process to stop but do not force-kill.
+		p.RequestInterrupt()
+		if err := p.WaitForExit(); err != nil && errText == "" && !isExpectedInterruptExit(err) {
+			errText = fmt.Sprintf("exit error: %v", err)
+		}
+		return exitProgressMsg{panelIdx: idx, errText: errText}
 	}
 }
 
@@ -155,8 +219,10 @@ type Model struct {
 	displayForView       func(*process.Panel) process.DisplayState
 	copySelection        func(string) error
 	exiting              bool
-	exitStatuses         []string
+	exitItems            []exitItem
 	exitCompleted        int
+	exitHadError         bool
+	exitSpinner          spinner.Model
 
 	killingPanel    bool
 	killingPanelIdx int
@@ -172,6 +238,11 @@ type Model struct {
 	startupSpinner   spinner.Model
 	panelSpecs       []profile.PanelSpec
 	scrollbackConfig profile.ScrollbackConfig
+
+	teardownSpecs     []profile.StartupSpec
+	teardownItems     []startupItem
+	teardownCompleted bool
+	teardownHadError  bool
 	msgChan          chan tea.Msg
 }
 
@@ -180,6 +251,9 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 	if len(themes) > 0 {
 		theme = themes[0]
 	}
+
+	s := spinner.New(spinner.WithSpinner(spinner.Dot))
+	s.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
 
 	return Model{
 		panels:                    panels,
@@ -192,6 +266,7 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 		scrollbackCursorLine:      -1,
 		scrollbackLastClickLine:   -1,
 		startupCompleted:          true,
+		exitSpinner:               s,
 		scrollbackConfig:          profile.ScrollbackConfig{},
 		msgChan:                   newMsgChan(),
 		sendInput: func(p *process.Panel, input []byte) error {
@@ -213,18 +288,23 @@ func NewModel(panels []*process.Panel, themes ...Theme) Model {
 	}
 }
 
-func NewModelWithSpecs(title string, startup []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
-	s := spinner.New(spinner.WithSpinner(spinner.Dot))
-	s.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
+func NewModelWithSpecs(title string, startup []profile.StartupSpec, teardown []profile.StartupSpec, panels []profile.PanelSpec, sb profile.ScrollbackConfig, theme Theme) Model {
+	startupSpinner := spinner.New(spinner.WithSpinner(spinner.Dot))
+	startupSpinner.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
+	exitSpinner := spinner.New(spinner.WithSpinner(spinner.Dot))
+	exitSpinner.Style = lipgloss.NewStyle().Foreground(theme.color(theme.StatusModeNormalFG))
 
 	return Model{
 		title:                     title,
 		startupSpecs:              startup,
 		startupItems:              newStartupItems(startup),
-		startupSpinner:            s,
+		startupSpinner:            startupSpinner,
+		exitSpinner:               exitSpinner,
 		panelSpecs:                panels,
 		scrollbackConfig:          sb,
 		theme:                     theme,
+		teardownSpecs:             teardown,
+		teardownItems:             newStartupItems(teardown),
 		msgChan:                   newMsgChan(),
 		grid:                      layout.Compute(len(panels)),
 		activePanel:               -1,
@@ -268,10 +348,101 @@ func (m Model) emitMsgBlocking(msg tea.Msg) {
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.exiting || m.killingPanel {
+		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen, m.exitSpinner.Tick)
+	}
 	if m.startupCompleted {
 		return tea.Batch(tick(), m.waitForMsg, tea.ClearScreen)
 	}
 	return tea.Batch(tick(), m.startupSequence, m.waitForMsg, tea.ClearScreen, m.startupSpinner.Tick)
+}
+
+func (m Model) teardownSequence() tea.Msg {
+	go func() {
+		if len(m.teardownSpecs) == 0 {
+			m.emitMsgBlocking(TeardownCompleteMsg{})
+			return
+		}
+		var asyncDone []<-chan struct{}
+		for i, spec := range m.teardownSpecs {
+			if spec.Mode == profile.StartupModeSync {
+				m.runTeardownItem(i, spec)
+				continue
+			}
+			asyncDone = append(asyncDone, m.runTeardownItemAsync(i, spec))
+		}
+		for _, ch := range asyncDone {
+			<-ch
+		}
+		m.emitMsgBlocking(TeardownCompleteMsg{})
+	}()
+	return nil
+}
+
+func (m Model) runTeardownItem(idx int, spec profile.StartupSpec) {
+	<-m.runTeardownItemAsync(idx, profile.StartupSpec{
+		WorkingDir: spec.WorkingDir,
+		Command:    spec.Command,
+		Mode:       profile.StartupModeSync,
+	})
+}
+
+func (m Model) runTeardownItemAsync(idx int, spec profile.StartupSpec) <-chan struct{} {
+	doneCh := make(chan struct{})
+	label := describeCommand(spec.Command)
+	m.emitMsgBlocking(teardownStatusMsg{idx: idx, status: startupStatusRunning})
+	m.emitMsg(LogMsg(fmt.Sprintf("--- Teardown starting %s (%s)", label, spec.Mode)))
+
+	cmd, stdout, stderr, err := buildStartupCommand(profile.StartupSpec{
+		WorkingDir: spec.WorkingDir,
+		Command:    spec.Command,
+		Mode:       spec.Mode,
+	})
+	if err != nil {
+		m.emitMsgBlocking(teardownStatusMsg{idx: idx, status: startupStatusError, errText: err.Error()})
+		close(doneCh)
+		return doneCh
+	}
+
+	done := make(chan struct{}, 2)
+	go m.streamTeardownOutput(idx, stdout, done)
+	go m.streamTeardownOutput(idx, stderr, done)
+
+	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		<-done
+		<-done
+		m.emitMsgBlocking(teardownStatusMsg{idx: idx, status: startupStatusError, errText: fmt.Sprintf("start failed: %v", err)})
+		close(doneCh)
+		return doneCh
+	}
+
+	go func() {
+		err := cmd.Wait()
+		<-done
+		<-done
+		statusMsg := teardownStatusMsg{idx: idx, status: startupStatusOK, exitCode: 0, hasExitCode: true}
+		if err != nil {
+			statusMsg.status = startupStatusError
+			statusMsg.exitCode, statusMsg.hasExitCode, statusMsg.errText = commandExitDetails(err)
+		}
+		m.emitMsgBlocking(statusMsg)
+		close(doneCh)
+	}()
+	return doneCh
+}
+
+func (m Model) streamTeardownOutput(idx int, r io.Reader, done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxStartupLogLineBytes)
+	for scanner.Scan() {
+		m.emitMsg(teardownLogMsg{idx: idx, line: scanner.Text()})
+	}
+	if err := scanner.Err(); err != nil {
+		m.emitMsg(teardownLogMsg{idx: idx, line: fmt.Sprintf("error: scanning output: %v", err)})
+	}
 }
 
 func (m Model) startupSequence() tea.Msg {
@@ -288,7 +459,7 @@ func (m Model) startupSequence() tea.Msg {
 
 		panels := make([]*process.Panel, len(m.panelSpecs))
 		for i, spec := range m.panelSpecs {
-			p := process.NewWithScrollbackCommandSpec(spec.Name, spec.Command, spec.KillCommand, spec.WorkingDir, m.scrollbackConfig.Dir, m.scrollbackConfig.MaxBytes)
+			p := process.NewWithScrollbackCommandSpec(spec.Name, spec.Command, process.CommandSpec{}, spec.WorkingDir, m.scrollbackConfig.Dir, m.scrollbackConfig.MaxBytes)
 			p.ResetScrollback()
 			if err := p.Start(); err != nil {
 				m.emitMsg(LogMsg(fmt.Sprintf("error: starting panel %s: %v", p.Name, err)))
@@ -431,6 +602,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LogMsg:
 		m.messageBuffer = append(m.messageBuffer, string(msg))
 		return m, m.waitForMsg
+	case teardownLogMsg:
+		m.messageBuffer = append(m.messageBuffer, m.formatTeardownLog(msg.idx, msg.line))
+		return m, m.waitForMsg
+	case teardownStatusMsg:
+		if msg.idx >= 0 && msg.idx < len(m.teardownItems) {
+			item := m.teardownItems[msg.idx]
+			item.Status = startupStatus(msg.status)
+			item.HasExitCode = msg.hasExitCode
+			item.ExitCode = msg.exitCode
+			item.ErrorText = msg.errText
+			m.teardownItems[msg.idx] = item
+			if msg.status == startupStatusError {
+				m.teardownHadError = true
+			}
+		}
+		return m, m.waitForMsg
+	case TeardownCompleteMsg:
+		m.teardownCompleted = true
+		if !m.teardownHadError {
+			return m, tea.Quit
+		}
+		return m, nil
 	case startupLogMsg:
 		m.messageBuffer = append(m.messageBuffer, m.formatStartupLog(msg.idx, msg.line))
 		return m, m.waitForMsg
@@ -451,19 +644,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizePanels()
 		return m, m.waitForMsg
 	case spinner.TickMsg:
-		if m.startupCompleted {
-			return m, nil
+		if m.exiting || m.killingPanel {
+			var cmd tea.Cmd
+			m.exitSpinner, cmd = m.exitSpinner.Update(msg)
+			return m, cmd
 		}
-		var cmd tea.Cmd
-		m.startupSpinner, cmd = m.startupSpinner.Update(msg)
-		return m, cmd
+		if !m.startupCompleted {
+			var cmd tea.Cmd
+			m.startupSpinner, cmd = m.startupSpinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	}
 
 	if m.killingPanel {
 		switch msg := msg.(type) {
 		case exitProgressMsg:
 			if msg.panelIdx == m.killingPanelIdx {
-				m.killStatus = msg.status
+				m.killStatus = msg.errText
 				// We don't immediately return m, nil here because we want to show the "exiting completed" state briefly
 				// But according to the plan, we deactivate the window.
 				// Let's stick to the plan for now: deactivate and stop showing dialog.
@@ -479,11 +677,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.exiting {
 		switch msg := msg.(type) {
+		case tea.KeyPressMsg:
+			// Second quit triggers force stop + exit.
+			switch msg.String() {
+			case "q", "ctrl+c":
+				for _, p := range m.panels {
+					if p != nil && p.Running() {
+						p.Stop()
+					}
+				}
+				return m, tea.Quit
+			}
+			return m, nil
 		case exitProgressMsg:
-			m.exitStatuses[msg.panelIdx] = msg.status
+			if msg.panelIdx >= 0 && msg.panelIdx < len(m.exitItems) {
+				it := m.exitItems[msg.panelIdx]
+				if msg.errText != "" {
+					it.Status = exitStatusError
+					it.ErrText = msg.errText
+					m.exitHadError = true
+				} else {
+					it.Status = exitStatusOK
+					it.ErrText = ""
+				}
+				m.exitItems[msg.panelIdx] = it
+			}
 			m.exitCompleted++
 			if m.exitCompleted == len(m.panels) {
-				return m, tea.Quit
+				// After all panels stopped, run teardown if configured.
+				if !m.teardownCompleted && len(m.teardownSpecs) > 0 {
+					return m, tea.Batch(m.exitSpinner.Tick, m.teardownSequence)
+				}
+				if !m.exitHadError && (m.teardownCompleted || len(m.teardownSpecs) == 0) && !m.teardownHadError {
+					return m, tea.Quit
+				}
+				return m, nil
 			}
 			return m, nil
 		}
@@ -623,12 +851,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.exiting = true
-			m.exitStatuses = make([]string, len(m.panels))
+			m.exitItems = make([]exitItem, len(m.panels))
+			m.exitCompleted = 0
+			m.exitHadError = false
+			m.teardownCompleted = len(m.teardownSpecs) == 0
+			m.teardownHadError = false
 			var cmds []tea.Cmd
 			for i, p := range m.panels {
-				m.exitStatuses[i] = fmt.Sprintf("exiting panel %s....", p.Name)
-				cmds = append(cmds, killPanelCmd(i, p))
+				// Only show panels with explicit kill commands in the exit dialog.
+				m.exitItems[i] = exitItem{Name: p.Name, Status: exitStatusRunning}
+				cmds = append(cmds, gracefulQuitPanelCmd(i, p))
 			}
+			// Start spinner ticks immediately.
+			cmds = append(cmds, m.exitSpinner.Tick)
 			return m, tea.Batch(cmds...)
 		}
 
@@ -901,16 +1136,127 @@ func (m Model) wrapExiting(body string) string {
 		return body
 	}
 
-	content := strings.Join(m.exitStatuses, "\n")
-	if m.killingPanel {
-		content = m.killStatus
+	title := "EXITING"
+	lines := []string{}
+
+	sp := m.exitSpinner.View()
+	if sp == "" {
+		sp = "…"
 	}
 
+	okIcon := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42")).
+		Background(m.theme.color(m.theme.OverlayBG)).
+		Bold(true).
+		Render("✓")
+	errIcon := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("196")).
+		Background(m.theme.color(m.theme.OverlayBG)).
+		Bold(true).
+		Render("✗")
+
+	if m.killingPanel {
+		title = "STOPPING"
+		name := "panel"
+		if m.killingPanelIdx >= 0 && m.killingPanelIdx < len(m.panels) {
+			name = m.panels[m.killingPanelIdx].Name
+		}
+		if m.killStatus == "" {
+			lines = append(lines, fmt.Sprintf("%s exiting %s", sp, name))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s %s %s", errIcon, name, m.killStatus))
+		}
+	} else {
+		for _, it := range m.exitItems {
+			switch it.Status {
+			case exitStatusOK:
+				lines = append(lines, fmt.Sprintf("%s exited %s", okIcon, it.Name))
+			case exitStatusError:
+				if it.ErrText != "" {
+					lines = append(lines, fmt.Sprintf("%s %s %s", errIcon, it.Name, it.ErrText))
+				} else {
+					lines = append(lines, fmt.Sprintf("%s %s kill failed", errIcon, it.Name))
+				}
+			default:
+				lines = append(lines, fmt.Sprintf("%s exiting %s", sp, it.Name))
+			}
+		}
+		if len(m.teardownSpecs) > 0 {
+			lines = append(lines, "", "Teardown:")
+			runningSpinner := m.exitSpinner.View()
+			for _, item := range m.teardownItems {
+				lines = append(lines, formatStartupStatusLine(m.theme, item, runningSpinner))
+			}
+		}
+		lines = append(lines, "")
+		if m.exitHadError {
+			lines = append(lines, "Exit error. Ctrl-C again (or q) to force quit")
+		} else if m.teardownHadError {
+			lines = append(lines, "Teardown error. Ctrl-C again (or q) to force quit")
+		} else {
+			lines = append(lines, "Ctrl-C again (or q) to force quit")
+		}
+	}
+
+	// Fit dialog inside terminal with margin; clamp to [24..84] x [6..18].
+	maxW := clamp(m.width-8, 24, 84)
+	maxH := clamp(m.height-6, 6, 18)
+	// Never exceed screen so borders aren't clipped.
+	maxW = min(maxW, max(1, m.width-2))
+	maxH = min(maxH, max(1, m.height-2))
+
+	// Ensure at least one line.
+	if len(lines) == 0 {
+		lines = []string{sp + " exiting"}
+	}
+
+	// Height budget: title + blank + lines.
+	contentLines := make([]string, 0, 2+len(lines))
+	contentLines = append(contentLines, title, "")
+	contentLines = append(contentLines, lines...)
+
+	// Trim to height budget.
+	if len(contentLines) > maxH {
+		contentLines = contentLines[:maxH-1]
+		contentLines = append(contentLines, "…")
+	}
+
+	// Content width: account for border (2) + padding L/R (2+2).
+	innerW := maxW - 6
+	if innerW < 1 {
+		innerW = 1
+	}
+	for i := range contentLines {
+		contentLines[i] = ansi.Truncate(contentLines[i], innerW, "")
+		contentLines[i] = padOrTruncate(contentLines[i], innerW)
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.theme.color(m.theme.ActiveNormalTitleFG)).
+		Background(m.theme.color(m.theme.ActiveNormalTitleBG)).
+		Padding(0, 1)
+	bodyStyle := lipgloss.NewStyle().
+		Foreground(m.theme.color(m.theme.OverlayFG)).
+		Background(m.theme.color(m.theme.OverlayBG))
+
+	// Style title line.
+	if len(contentLines) > 0 {
+		tw := innerW - 2
+		if tw < 0 {
+			tw = 0
+		}
+		contentLines[0] = titleStyle.Render(" " + ansi.Truncate(contentLines[0], tw, "") + " ")
+	}
+
+	content := bodyStyle.Render(strings.Join(contentLines, "\n"))
 	dialogBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(1, 3).
-		Align(lipgloss.Center).
+		BorderForeground(m.theme.color(m.theme.ActiveNormalBorder)).
+		Background(m.theme.color(m.theme.OverlayBG)).
+		Padding(1, 2).
+		Width(maxW).
+		MaxWidth(maxW).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialogBox)
@@ -2075,6 +2421,13 @@ func (m Model) formatStartupLog(idx int, line string) string {
 		return line
 	}
 	return fmt.Sprintf("[%s] %s", m.startupItems[idx].Label, line)
+}
+
+func (m Model) formatTeardownLog(idx int, line string) string {
+	if idx < 0 || idx >= len(m.teardownItems) {
+		return line
+	}
+	return fmt.Sprintf("[teardown:%s] %s", m.teardownItems[idx].Label, line)
 }
 
 func (m Model) renderMessageBufferLines(innerH int) []string {
