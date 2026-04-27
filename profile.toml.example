@@ -10,6 +10,14 @@ mode = "sync"
 program = "sleep"
 args = ["2"]
 
+[[teardown]]
+shell = "sleep 5"
+mode = "async"
+
+[[teardown]]
+shell = "sleep 3"
+mode = "sync"
+
 [panel.clock]
 order = 0
 shell = "while true; do date; sleep 1; done"

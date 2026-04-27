@@ -96,6 +96,10 @@ workingdir = "."
 shell = "printf 'bootstrapping demo...\\n'; sleep 1"
 mode = "sync"
 
+[[teardown]]
+shell = "sleep 15"
+mode = "sync"
+
 [panel.clock]
 order = 0
 shell = "while true; do date; sleep 1; done"
@@ -113,9 +117,10 @@ shell = "printf 'Insert mode demo: type something and press Enter.\\n\\n'; while
 Profile rules:
 
 - Use `[[startup]]` for one-off setup commands that run before or alongside the UI.
+- Use `[[teardown]]` for one-off cleanup commands that run after all panels have stopped on global quit.
 - Use `[panel.<name>]` for long-lived commands you want visible in the grid.
-- Set exactly one of `program` or `shell` for each startup item and panel.
-- Use `workingdir` at the top level as the default directory, then override per startup item or panel when needed.
+- Set exactly one of `program` or `shell` for each startup/teardown item and panel.
+- `workingdir` at the top level is default, override per startup/teardown item or panel when needed.
 - Use `order` to pin a panel earlier in the grid without rearranging the file.
 
 Shell fields execute via `sh`, so treat profile files as trusted local automation.
@@ -134,11 +139,16 @@ The shortest path to using muxedo:
 - Press `Esc` in scrollback to return to the live panel.
 - Drag inside a live panel or scrollback to select text, then press `y` or `Enter` to copy it.
 - Press `r` in normal mode to restart the focused panel.
-- Press `x` in normal mode to stop the focused panel and run its optional kill command.
+- Press `x` in normal mode to stop the focused panel.
 - Press `m` in normal mode to maximize or restore the focused panel.
 - Press `?` (not in insert mode) to open a help dialog with shortcuts.
 - Press `Ctrl+B` to toggle the Message Buffer.
-- Press `q` or `Ctrl+C` to quit when no panel is focused.
+- Press `q` or `Ctrl+C` to quit when no panel is focused (gracefully stops panels, then runs `[[teardown]]`).
+- While quitting, press `Ctrl+C` again (or `q`) to force quit.
+
+Migration note (breaking change):
+
+- Per-panel kill fields (`shell_kill`, `kill_program`, `kill_args`) removed. Move those commands into global `[[teardown]]` (order them as desired).
 
 ## Scrollback and Clipboard
 

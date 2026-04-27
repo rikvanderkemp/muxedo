@@ -20,7 +20,6 @@ type PanelSpec struct {
 	Order       *int
 	WorkingDir  string
 	Command     process.CommandSpec
-	KillCommand process.CommandSpec
 }
 
 // StartupSpec describes command run before panel initialization.
@@ -51,6 +50,7 @@ type Profile struct {
 	Title      string
 	Panels     []PanelSpec
 	Startup    []StartupSpec
+	Teardown   []StartupSpec
 	Scrollback ScrollbackConfig
 	WorkingDir string
 }
@@ -59,6 +59,7 @@ type rawProfile struct {
 	Title      string              `toml:"title"`
 	WorkingDir string              `toml:"workingdir"`
 	Startup    []rawStartup        `toml:"startup"`
+	Teardown   []rawStartup        `toml:"teardown"`
 	Panel      map[string]rawPanel `toml:"panel"`
 	Scrollback rawScrollback       `toml:"scrollback"`
 }
@@ -78,11 +79,7 @@ type rawPanel struct {
 	Program     string   `toml:"program"`
 	Args        []string `toml:"args"`
 	Shell       string   `toml:"shell"`
-	KillProgram string   `toml:"kill_program"`
-	KillArgs    []string `toml:"kill_args"`
-	ShellKill   string   `toml:"shell_kill"`
 	Cmd         string   `toml:"cmd"`
-	CmdKill     string   `toml:"cmd_kill"`
 }
 
 type rawScrollback struct {
@@ -134,8 +131,8 @@ func Load(path string) (Profile, error) {
 		if !ok {
 			continue
 		}
-		if p.Cmd != "" || p.CmdKill != "" {
-			return Profile{}, fmt.Errorf("panel %q: legacy cmd/cmd_kill fields are no longer supported; use program/args or shell/shell_kill", name)
+		if p.Cmd != "" {
+			return Profile{}, fmt.Errorf("panel %q: legacy cmd field is no longer supported; use program/args or shell", name)
 		}
 		if p.Order != nil {
 			if *p.Order < 0 {
@@ -170,17 +167,6 @@ func Load(path string) (Profile, error) {
 			return Profile{}, err
 		}
 
-		kill := process.CommandSpec{
-			Program: p.KillProgram,
-			Args:    p.KillArgs,
-			Shell:   p.ShellKill,
-		}
-		if !kill.IsZero() {
-			if err := kill.Validate(fmt.Sprintf("panel %q kill command", name)); err != nil {
-				return Profile{}, err
-			}
-		}
-
 		entries = append(entries, panelEntry{
 			name:             name,
 			declarationIndex: declarationIndex,
@@ -190,7 +176,6 @@ func Load(path string) (Profile, error) {
 				Order:       p.Order,
 				WorkingDir:  abs,
 				Command:     cmd,
-				KillCommand: kill,
 			},
 		})
 	}
@@ -265,6 +250,52 @@ func Load(path string) (Profile, error) {
 		})
 	}
 
+	teardown := make([]StartupSpec, 0, len(raw.Teardown))
+	for i, s := range raw.Teardown {
+		if s.Cmd != "" {
+			return Profile{}, fmt.Errorf("teardown command at index %d: legacy cmd field is no longer supported; use program/args or shell", i)
+		}
+
+		dir := s.WorkingDir
+		if dir == "" {
+			dir = globalWorkingDir
+		}
+		if dir == "" {
+			dir = "."
+		}
+
+		dir = expandHome(dir)
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return Profile{}, fmt.Errorf("teardown command at index %d: resolving workingdir: %w", i, err)
+		}
+
+		cmd := process.CommandSpec{
+			Program: s.Program,
+			Args:    s.Args,
+			Shell:   s.Shell,
+		}
+		if err := cmd.Validate(fmt.Sprintf("teardown command at index %d", i)); err != nil {
+			return Profile{}, err
+		}
+
+		mode := StartupModeAsync
+		if s.Mode != "" {
+			mode = StartupMode(s.Mode)
+		}
+		switch mode {
+		case StartupModeAsync, StartupModeSync:
+		default:
+			return Profile{}, fmt.Errorf("teardown command at index %d: invalid mode %q (want async or sync)", i, s.Mode)
+		}
+
+		teardown = append(teardown, StartupSpec{
+			WorkingDir: abs,
+			Command:    cmd,
+			Mode:       mode,
+		})
+	}
+
 	sb, err := resolveScrollback(raw.Scrollback)
 	if err != nil {
 		return Profile{}, err
@@ -279,6 +310,7 @@ func Load(path string) (Profile, error) {
 		Title:      title,
 		Panels:     panels,
 		Startup:    startup,
+		Teardown:   teardown,
 		Scrollback: sb,
 		WorkingDir: globalWorkingDir,
 	}, nil

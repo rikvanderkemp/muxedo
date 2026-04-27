@@ -2,8 +2,6 @@
 package process
 
 import (
-	"context"
-	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -267,33 +265,7 @@ func TestDisplayStatePreservesStyledSpaces(t *testing.T) {
 	}
 }
 
-func TestRunCmdKillReportsCommandError(t *testing.T) {
-	p := NewWithCommandSpec("test", CommandSpec{Shell: "true"}, CommandSpec{Program: "__definitely_missing_muxedo_binary__"}, ".")
-
-	err := p.RunCmdKill()
-	if err == nil {
-		t.Fatal("RunCmdKill() error = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "run kill command") {
-		t.Fatalf("RunCmdKill() error = %v, want wrapped run error", err)
-	}
-}
-
-func TestRunCmdKillTimesOut(t *testing.T) {
-	p := NewWithCommandSpec("test", CommandSpec{Shell: "true"}, CommandSpec{Shell: "sleep 1"}, ".")
-	p.killTimeout = 20 * time.Millisecond
-
-	err := p.RunCmdKill()
-	if err == nil {
-		t.Fatal("RunCmdKill() error = nil, want timeout")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("RunCmdKill() error = %v, want context deadline exceeded", err)
-	}
-	if !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("RunCmdKill() error = %v, want timeout detail", err)
-	}
-}
+// Kill-command support removed from muxedo profile UX; tests for RunCmdKill removed.
 
 func TestPanelConcurrentLifecycleReads(t *testing.T) {
 	p := New("test", "sleep 1", "", ".")

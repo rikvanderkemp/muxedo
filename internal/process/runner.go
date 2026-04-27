@@ -2,9 +2,7 @@
 package process
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -13,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
 )
 
@@ -24,8 +22,6 @@ type Panel struct {
 	Command CommandSpec
 	Kill    CommandSpec
 	Dir     string
-	// killTimeout bounds optional kill-command execution during stop/quit flows.
-	killTimeout time.Duration
 
 	ptmx       *os.File
 	cmd        *exec.Cmd
@@ -66,8 +62,6 @@ func (p *Panel) ExitError() error {
 
 const maxReplayBytes = 1 << 20 // 1 MiB of recent PTY stream for resize reflow
 
-const defaultRunCmdKillTimeout = 2 * time.Second
-
 // New creates panel from shell command strings.
 func New(name, cmd, cmdKill, dir string) *Panel {
 	return NewWithCommandSpec(name, CommandSpec{Shell: cmd}, CommandSpec{Shell: cmdKill}, dir)
@@ -80,7 +74,6 @@ func NewWithCommandSpec(name string, command, kill CommandSpec, dir string) *Pan
 		Command:      command,
 		Kill:         kill,
 		Dir:          dir,
-		killTimeout:  defaultRunCmdKillTimeout,
 		term:         vt10x.New(vt10x.WithSize(80, 24)),
 		displayDirty: true,
 	}
@@ -98,7 +91,6 @@ func NewWithScrollbackCommandSpec(name string, command, kill CommandSpec, dir, s
 		Command:      command,
 		Kill:         kill,
 		Dir:          dir,
-		killTimeout:  defaultRunCmdKillTimeout,
 		term:         vt10x.New(vt10x.WithSize(80, 24)),
 		sb:           newScrollbackWriter(scrollbackDir, name, maxBytes),
 		displayDirty: true,
@@ -281,29 +273,39 @@ func (p *Panel) waitForExit(cmd *exec.Cmd, waitDone <-chan error) {
 	<-waitDone
 }
 
-// RunCmdKill runs optional panel kill command.
-func (p *Panel) RunCmdKill() error {
-	if p.Kill.IsZero() {
-		return nil
-	}
-	timeout := p.killTimeout
-	if timeout <= 0 {
-		timeout = defaultRunCmdKillTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+// RequestInterrupt asks the panel process to stop but does not force-kill it.
+// It sends Ctrl-C to the PTY (when present) and an os.Interrupt to the process.
+func (p *Panel) RequestInterrupt() {
+	p.runtimeMu.RLock()
+	ptmx := p.ptmx
+	cmd := p.cmd
+	p.runtimeMu.RUnlock()
 
-	c, err := p.Kill.BuildContext(ctx, p.Dir, true)
-	if err != nil {
-		return fmt.Errorf("build kill command: %w", err)
+	if ptmx != nil {
+		_, _ = ptmx.Write([]byte{0x03})
 	}
-	if err := c.Run(); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("run kill command: timed out after %s: %w", timeout, ctx.Err())
-		}
-		return fmt.Errorf("run kill command: %w", err)
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(os.Interrupt)
 	}
-	return nil
+}
+
+// WaitForExit blocks until the panel process exits (or panel not running).
+// Returns recorded exit error (if any).
+func (p *Panel) WaitForExit() error {
+	p.runtimeMu.RLock()
+	waitDone := p.waitDone
+	exitErr := p.exitErr
+	p.runtimeMu.RUnlock()
+
+	if waitDone == nil {
+		return exitErr
+	}
+	<-waitDone
+
+	p.runtimeMu.RLock()
+	exitErr = p.exitErr
+	p.runtimeMu.RUnlock()
+	return exitErr
 }
 
 // Restart stops panel, resets terminal state, and starts it again.
